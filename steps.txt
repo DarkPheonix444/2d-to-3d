@@ -1,0 +1,4 @@
+image uplaod
+image normalization 
+noise removal 
+extraction of details 
