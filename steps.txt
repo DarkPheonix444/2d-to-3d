@@ -2,3 +2,17 @@ image uplaod
 image normalization 
 noise removal 
 extraction of details 
+CoreEngine
+│
+├── Input Layer
+├── Preprocessing Layer
+├── Vision Layer
+├── Layout Layer
+└── Semantic Layer
+
+node graph            ✔
+cycle detection       ✔
+room detection        ✔
+intersection splitting ✘
+wall thickness merge   ✘
+room validation        ✘
