@@ -16,14 +16,16 @@ class WindowDoorDetector:
         self.door_gap_max = door_gap_max
         self.window_parallel_tol = window_parallel_tol
 
-    def detect(self,Layout:Dict):
-        walls=Layout['walls']
+    def detect(self,Layout:List[Dict]):
 
-        door=self._detect_doors(walls)
-        window=self._detect_windows(walls)
+        for floor in Layout:
+            walls=floor['walls']
 
-        Layout['doors']=door
-        Layout['windows']=window
+            door=self._detect_doors(walls)
+            window=self._detect_windows(walls)
+
+            floor['doors']=door
+            floor['windows']=window
 
         return Layout
     

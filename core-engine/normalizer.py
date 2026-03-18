@@ -4,7 +4,7 @@ from PIL import Image
 from typing import List
 
 
-class normalizer:
+class Normalizer:
 
     def __init__(self,target_width:int=1500):
         self.target_width = target_width
@@ -59,9 +59,9 @@ class normalizer:
 
             new_size=(self.target_width,int(h*scale)) 
 
-            image=cv2.resize(img,new_size)
+            img=cv2.resize(img,new_size)
 
-        return image
+        return img
 
 
     def _deskew(self,img:np.ndarray)->np.ndarray:

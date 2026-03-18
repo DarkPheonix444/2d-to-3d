@@ -14,15 +14,15 @@ supported_image_types=[
 ]
 
 
-class inputcontroller:
-    def __init__(self,file_path:str):
+class InputController:
+
+
+
+    def process(self,file_path:str)->list[Image.Image]:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
         
         self.file_path = file_path
-
-
-    def process(self)->list[Image.Image]:
         mime_types,_=mimetypes.guess_type(self.file_path)
 
         if mime_types in supported_image_types:

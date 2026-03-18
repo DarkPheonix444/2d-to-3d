@@ -64,24 +64,32 @@ class LayoutGraph:
         return nodes
 
     def _snap_nodes(self, nodes: Set[Point]) -> Set[Point]:
+        nodes = list(nodes)
+        visited = set()
+        clusters = []
 
-        snapped: Set[Point] = set()
+        for i, n1 in enumerate(nodes):
+            if i in visited:
+                continue
 
-        for node in nodes:
+            cluster = [n1]
+            visited.add(i)
 
-            merged = False
+            for j, n2 in enumerate(nodes):
+                if j in visited:
+                    continue
 
-            for existing in snapped:
+                if self._dist(n1, n2) <= self.snap_tolerance:
+                    cluster.append(n2)
+                    visited.add(j)
 
-                if self._dist(node, existing) <= self.snap_tolerance:
-                    merged = True
-                    break
+            # average cluster
+            cx = int(sum(p[0] for p in cluster) / len(cluster))
+            cy = int(sum(p[1] for p in cluster) / len(cluster))
 
-            if not merged:
-                snapped.add(node)
+            clusters.append((cx, cy))
 
-        return snapped
-
+        return set(clusters)
     def _build_graph(
         self,
         nodes: Set[Point],
