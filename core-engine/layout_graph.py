@@ -64,110 +64,263 @@ class LayoutGraph:
         return nodes
 
     def _snap_nodes(self, nodes: Set[Point]) -> Set[Point]:
-        nodes = list(nodes)
-        visited = set()
-        clusters = []
+        node_list = list(nodes)
 
-        for i, n1 in enumerate(nodes):
-            if i in visited:
+        if not node_list:
+            return set()
+
+        visited = [False] * len(node_list)
+        clustered: Set[Point] = set()
+
+        for i, seed in enumerate(node_list):
+            if visited[i]:
                 continue
 
-            cluster = [n1]
-            visited.add(i)
+            stack = [i]
+            visited[i] = True
+            cluster = [seed]
 
-            for j, n2 in enumerate(nodes):
-                if j in visited:
-                    continue
+            while stack:
+                idx = stack.pop()
+                p = node_list[idx]
 
-                if self._dist(n1, n2) <= self.snap_tolerance:
-                    cluster.append(n2)
-                    visited.add(j)
+                for j, q in enumerate(node_list):
+                    if visited[j]:
+                        continue
 
-            # average cluster
-            cx = int(sum(p[0] for p in cluster) / len(cluster))
-            cy = int(sum(p[1] for p in cluster) / len(cluster))
+                    if self._dist(p, q) <= self.snap_tolerance:
+                        visited[j] = True
+                        stack.append(j)
+                        cluster.append(q)
 
-            clusters.append((cx, cy))
+            cx = int(round(sum(p[0] for p in cluster) / len(cluster)))
+            cy = int(round(sum(p[1] for p in cluster) / len(cluster)))
+            clustered.add((cx, cy))
 
-        return set(clusters)
+        return clustered
+
     def _build_graph(
         self,
         nodes: Set[Point],
         walls: List[Line]
     ) -> Dict[Point, List[Point]]:
 
-        graph: Dict[Point, List[Point]] = {n: [] for n in nodes}
+        graph = {n: set() for n in nodes}
 
         for p1, p2 in walls:
 
             n1 = self._nearest_node(p1, nodes)
             n2 = self._nearest_node(p2, nodes)
 
-            if n2 not in graph[n1]:
-                graph[n1].append(n2)
+            if n1 == n2:
+                continue
 
-            if n1 not in graph[n2]:
-                graph[n2].append(n1)
+            graph[n1].add(n2)
+            graph[n2].add(n1)
 
-        return graph
+        return {k: list(v) for k, v in graph.items()}
 
     def _detect_rooms(self, graph: Dict[Point, List[Point]]) -> List[List[Point]]:
-
-        visited: Set[Point] = set()
         rooms: List[List[Point]] = []
+        seen_cycles: Set[Tuple[Point, ...]] = set()
+        max_cycle_len = 14
 
-        for node in graph:
+        def dfs(start: Point, current: Point, path: List[Point]) -> None:
+            if len(path) > max_cycle_len:
+                return
 
-            if node in visited:
-                continue
+            for neighbor in graph[current]:
+                if neighbor == start and len(path) >= 4:
+                    cycle = path[:]
+                    key = self._canonical_cycle(cycle)
 
-            cycle = self._dfs_cycle(node, graph, visited)
+                    if key in seen_cycles:
+                        continue
 
-            if cycle and len(cycle) >= 4:
-                rooms.append(cycle)
+                    if not self._is_chordless_cycle(cycle, graph):
+                        continue
 
-        return rooms
-
-    def _dfs_cycle(
-        self,
-        start: Point,
-        graph: Dict[Point, List[Point]],
-        visited: Set[Point]
-    ):
-
-        stack = [(start, None)]
-        parent = {}
-
-        while stack:
-
-            node, prev = stack.pop()
-
-            if node in visited:
-                continue
-
-            visited.add(node)
-            parent[node] = prev
-
-            for nb in graph[node]:
-
-                if nb == prev:
+                    if self._is_valid_room(cycle):
+                        seen_cycles.add(key)
+                        rooms.append(cycle)
                     continue
 
-                if nb in parent:
+                if neighbor in path:
+                    continue
 
-                    cycle = [nb, node]
-                    p = parent[node]
+                dfs(start, neighbor, path + [neighbor])
 
-                    while p and p != nb:
-                        cycle.append(p)
-                        p = parent[p]
+        for node in graph:
+            dfs(node, node, [node])
 
-                    cycle.reverse()
-                    return cycle
+        return self._remove_container_cycles(rooms)
 
-                stack.append((nb, node))
+    def _is_valid_room(self, room: List[Point]) -> bool:
 
-        return None
+        room = list(dict.fromkeys(room))
+
+        if len(room) < 4:
+            return False
+
+        if self._has_duplicate_or_near_duplicate_vertices(room):
+            return False
+
+        if self._has_self_intersection(room):
+            return False
+
+        area = 0
+        for i in range(len(room)):
+            x1, y1 = room[i]
+            x2, y2 = room[(i + 1) % len(room)]
+            area += x1 * y2 - x2 * y1
+
+        area = abs(area) / 2
+
+        return area > 800
+
+    def _canonical_cycle(self, cycle: List[Point]) -> Tuple[Point, ...]:
+        seq = cycle[:]
+        n = len(seq)
+
+        variants = []
+        for i in range(n):
+            variants.append(tuple(seq[i:] + seq[:i]))
+
+        rev = list(reversed(seq))
+        for i in range(n):
+            variants.append(tuple(rev[i:] + rev[:i]))
+
+        return min(variants)
+
+    def _is_chordless_cycle(self, cycle: List[Point], graph: Dict[Point, List[Point]]) -> bool:
+        cycle_set = set(cycle)
+        n = len(cycle)
+
+        cycle_edges = set()
+        for i in range(n):
+            a = cycle[i]
+            b = cycle[(i + 1) % n]
+            cycle_edges.add(tuple(sorted((a, b))))
+
+        for a in cycle:
+            for b in graph[a]:
+                if b not in cycle_set:
+                    continue
+
+                edge = tuple(sorted((a, b)))
+                if edge in cycle_edges:
+                    continue
+
+                return False
+
+        return True
+
+    def _has_duplicate_or_near_duplicate_vertices(self, room: List[Point]) -> bool:
+        for i in range(len(room)):
+            for j in range(i + 1, len(room)):
+                if self._dist(room[i], room[j]) < self.snap_tolerance:
+                    return True
+        return False
+
+    def _has_self_intersection(self, polygon: List[Point]) -> bool:
+        n = len(polygon)
+
+        def segments_intersect(a1: Point, a2: Point, b1: Point, b2: Point) -> bool:
+            def orient(p: Point, q: Point, r: Point) -> int:
+                val = (q[1] - p[1]) * (r[0] - q[0]) - (q[0] - p[0]) * (r[1] - q[1])
+                if abs(val) < 1e-9:
+                    return 0
+                return 1 if val > 0 else 2
+
+            def on_seg(p: Point, q: Point, r: Point) -> bool:
+                return (
+                    min(p[0], r[0]) <= q[0] <= max(p[0], r[0]) and
+                    min(p[1], r[1]) <= q[1] <= max(p[1], r[1])
+                )
+
+            o1 = orient(a1, a2, b1)
+            o2 = orient(a1, a2, b2)
+            o3 = orient(b1, b2, a1)
+            o4 = orient(b1, b2, a2)
+
+            if o1 != o2 and o3 != o4:
+                return True
+
+            if o1 == 0 and on_seg(a1, b1, a2):
+                return True
+            if o2 == 0 and on_seg(a1, b2, a2):
+                return True
+            if o3 == 0 and on_seg(b1, a1, b2):
+                return True
+            if o4 == 0 and on_seg(b1, a2, b2):
+                return True
+
+            return False
+
+        for i in range(n):
+            a1 = polygon[i]
+            a2 = polygon[(i + 1) % n]
+
+            for j in range(i + 1, n):
+                if j == i:
+                    continue
+
+                if (j == (i + 1) % n) or (i == (j + 1) % n):
+                    continue
+
+                b1 = polygon[j]
+                b2 = polygon[(j + 1) % n]
+
+                if segments_intersect(a1, a2, b1, b2):
+                    return True
+
+        return False
+
+    def _remove_container_cycles(self, rooms: List[List[Point]]) -> List[List[Point]]:
+        if not rooms:
+            return rooms
+
+        def area(poly: List[Point]) -> float:
+            s = 0
+            for i in range(len(poly)):
+                x1, y1 = poly[i]
+                x2, y2 = poly[(i + 1) % len(poly)]
+                s += x1 * y2 - x2 * y1
+            return abs(s) / 2
+
+        def point_in_poly(pt: Point, poly: List[Point]) -> bool:
+            x, y = pt
+            inside = False
+            j = len(poly) - 1
+
+            for i in range(len(poly)):
+                xi, yi = poly[i]
+                xj, yj = poly[j]
+
+                if ((yi > y) != (yj > y)):
+                    x_cross = (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi
+                    if x < x_cross:
+                        inside = not inside
+                j = i
+
+            return inside
+
+        keep = [True] * len(rooms)
+        areas = [area(r) for r in rooms]
+
+        for i in range(len(rooms)):
+            for j in range(len(rooms)):
+                if i == j:
+                    continue
+
+                if areas[i] <= areas[j]:
+                    continue
+
+                if all(point_in_poly(p, rooms[i]) for p in rooms[j]):
+                    keep[i] = False
+                    break
+
+        return [rooms[i] for i in range(len(rooms)) if keep[i]]
 
     def _nearest_node(self, p: Point, nodes: Set[Point]) -> Point:
 

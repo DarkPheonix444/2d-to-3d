@@ -6,7 +6,6 @@ from layout_graph import LayoutGraph
 
 from parallel_wall import ParallelWallMerger
 from windowdoor import WindowDoorDetector
-import numpy as np
 from typing import List, Dict
 
 
@@ -27,8 +26,7 @@ class CoreEngine:
 
         normalized = self.normalizer.normalize(images)
 
-        images_np = [np.array(img) for img in images]
-        walls = self.wall_detector.detect(images_np)
+        walls = self.wall_detector.detect(normalized)
 
         split_walls = self.intersection.process(walls)
 

@@ -10,89 +10,37 @@ class Normalizer:
         self.target_width = target_width
 
     def normalize(self,images:List[Image.Image])->List[np.ndarray]:
+        if not isinstance(images, list):
+            raise TypeError("images must be a list of PIL.Image objects")
 
-        processed_image=[]
+        processed_images: List[np.ndarray] = []
 
+        for idx, img in enumerate(images):
+            if not isinstance(img, Image.Image):
+                raise TypeError(f"images[{idx}] must be a PIL.Image.Image")
 
-        for img in images:
-            
-            img_np=np.array(img)
+            if img.width == 0 or img.height == 0:
+                raise ValueError(f"images[{idx}] has invalid size: {img.size}")
 
-            img_np=cv2.cvtColor(img_np,cv2.COLOR_RGB2BGR)
+            try:
+                img_rgb = img.convert("RGB")
+            except Exception as exc:
+                raise ValueError(f"images[{idx}] cannot be converted to RGB") from exc
 
-            img_np=self.resize_if_needed(img_np)
+            img_np = np.asarray(img_rgb, dtype=np.uint8)
+            bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+            gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
 
-            gray=cv2.cvtColor(img_np, cv2.COLOR_BGR2GRAY)
+            if min(gray.shape[:2]) >= 3 and self._should_apply_blur(gray):
+                gray = cv2.GaussianBlur(gray, (3, 3), 0)
 
-            blur = cv2.GaussianBlur(gray, (5, 5), 0)
+            processed_images.append(gray)
 
+        return processed_images
 
-            thresh = cv2.adaptiveThreshold(
-                blur,
-                255,
-                cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                cv2.THRESH_BINARY_INV,
-                11,
-                2
-            )
-
-
-            kernel=np.ones((3,3),np.uint8)
-
-            morph = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-            morph = cv2.morphologyEx(morph, cv2.MORPH_OPEN, kernel)
-
-            deskewed=self._deskew(morph)
-
-            processed_image.append(deskewed)
-
-        return processed_image
-    
-
-    def resize_if_needed(self,img:np.ndarray)->np.ndarray:
-
-        h,w=img.shape[:2]
-
-        if w>self.target_width:
-
-            scale=self.target_width/w
-
-            new_size=(self.target_width,int(h*scale)) 
-
-            img=cv2.resize(img,new_size)
-
-        return img
-
-
-    def _deskew(self,img:np.ndarray)->np.ndarray:
-
-        coords=np.column_stack(np.where(img>0))
-
-        if len(coords)==0:
-            return img
-
-
-        angle=cv2.minAreaRect(coords)[-1]
-
-        if angle<-45:
-            angle=-(90+angle)
-
-        else:
-            angle=-angle
-
-
-        (h,w)=img.shape[:2]
-
-        center=(w//2,h//2)
-
-        rotation_matrix=cv2.getRotationMatrix2D(center,angle,1.0)
-
-        rotated = cv2.warpAffine(
-            img,
-            rotation_matrix,
-            (w, h),
-            flags=cv2.INTER_CUBIC,
-            borderMode=cv2.BORDER_REPLICATE
-        )
-
-        return rotated       
+    def _should_apply_blur(self, gray: np.ndarray) -> bool:
+        # Estimate high-frequency speckle by comparing with median-smoothed image.
+        median = cv2.medianBlur(gray, 3)
+        noise_residual = cv2.absdiff(gray, median)
+        noise_score = float(np.mean(noise_residual))
+        return noise_score > 4.0

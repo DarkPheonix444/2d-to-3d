@@ -16,3 +16,10 @@ room detection        ✔
 intersection splitting ✘
 wall thickness merge   ✘
 room validation        ✘
+
+
+Normalizer ✅
+WallDetector ✅
+Intersection ⚠️ (almost there)
+Graph ❌ (THIS is breaking everything)
+Room Detection ❌ (dependent on graph)
