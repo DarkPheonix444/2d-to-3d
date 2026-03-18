@@ -40,7 +40,5 @@ class CoreEngine:
         return {
             "walls": walls,
             "split_walls": split_walls,
-            "layout": layout,
-            "parallel_wall":parallel_wall,
-            "window_door":window_door
+            "layout": layout
         }

@@ -6,7 +6,7 @@ Line = Tuple[Point, Point]
 
 class IntersectionDetector:
 
-    def __init__(self, tolerance: int = 5, snap_grid: int = 5):
+    def __init__(self, tolerance: int = 5, snap_grid: int = 10):
         self.tolerance = tolerance
         self.snap_grid = snap_grid
 
@@ -17,14 +17,15 @@ class IntersectionDetector:
 
         for walls in floors:
 
-            # STEP 1: SNAP ALL INPUT WALLS
-            walls = [self._snap_line(w) for w in walls]
+            # walls = self._collapse_parallel(walls)
 
             intersections = self._find_intersections(walls)
             print(f"[IntersectionDetector] total intersections found: {len(intersections)}")
 
             split_walls = self._split_walls(walls, intersections)
             print(f"[IntersectionDetector] total split segments: {len(split_walls)}")
+
+ 
 
             results.append(split_walls)
 
@@ -41,7 +42,7 @@ class IntersectionDetector:
             for j in range(i + 1, len(walls)):
                 p = self._line_intersection(walls[i], walls[j])
                 if p:
-                    cross_points.add(self._snap_point(p))
+                    cross_points.add(p)
 
         # 2. T-JUNCTIONS (endpoint of one wall touches body of another)
         t_points = self._detect_t_junctions(walls)
@@ -50,6 +51,8 @@ class IntersectionDetector:
         all_points = cross_points.union(t_points)
 
         return list(all_points)
+    
+    
 
     def _detect_t_junctions(self, walls: List[Line]) -> Set[Point]:
         junctions: Set[Point] = set()
@@ -66,7 +69,7 @@ class IntersectionDetector:
 
                     # Endpoint must lie on the interior/body of the other wall.
                     if self._point_on_line(endpoint, other) and not self._is_near_any_endpoint(endpoint, other):
-                        junctions.add(self._snap_point(endpoint))
+                        junctions.add(endpoint)
 
         # Extra tolerance-safe pass: detect near-miss endpoint/body cases that may
         # appear after wall snapping and preserve true junctions.
@@ -105,8 +108,8 @@ class IntersectionDetector:
         (hx1, hy1), (hx2, hy2) = h
         (vx1, vy1), (vx2, vy2) = v
 
-        h_y = int(round((hy1 + hy2) / 2))
-        v_x = int(round((vx1 + vx2) / 2))
+        h_y = (hy1 // self.snap_grid) * self.snap_grid
+        v_x = (vx1 // self.snap_grid) * self.snap_grid
 
         # STRICT VALIDATION
         if not self._on_segment(v_x, h_y, h):
@@ -128,14 +131,26 @@ class IntersectionDetector:
                 continue
 
             pts: Set[Point] = set()
-            p0 = self._project_point_to_wall(self._snap_point(wall[0]), wall)
-            p1 = self._project_point_to_wall(self._snap_point(wall[1]), wall)
+
+            p0 = wall[0]
+            p1 = wall[1]
             pts.add(p0)
             pts.add(p1)
 
+            (x1, y1), (x2, y2) = wall
+
             for p in points:
-                if self._point_on_line(p, wall):
-                    pts.add(self._project_point_to_wall(self._snap_point(p), wall))
+                px, py = p
+
+                if self._is_horizontal(wall):
+                    if abs(py - y1) <= self.tolerance:
+                        if min(x1, x2) <= px <= max(x1, x2):
+                            pts.add((px, y1))
+
+                elif self._is_vertical(wall):
+                    if abs(px - x1) <= self.tolerance:
+                        if min(y1, y2) <= py <= max(y1, y2):
+                            pts.add((x1, py))
 
             pts = list(pts)
 
@@ -152,7 +167,7 @@ class IntersectionDetector:
                     continue
 
                 # REMOVE MICRO SEGMENTS
-                if self._length(p1, p2) < 5:
+                if self._length(p1, p2) < self.snap_grid:
                     continue
 
                 # Keep segment axis-aligned to preserve layout graph consistency.
@@ -160,14 +175,25 @@ class IntersectionDetector:
 
                 new_walls.append((p1, p2))
 
-        return self._deduplicate(new_walls)
+        cleaned: List[Line] = []
+        for (x1, y1), (x2, y2) in new_walls:
+            if x1 != x2 and y1 != y2:
+                continue
+
+            if abs(x1 - x2) + abs(y1 - y2) < self.snap_grid:
+                continue
+
+            cleaned.append(((x1, y1), (x2, y2)))
+
+        deduped = self._deduplicate(cleaned)
+        return deduped
 
     # ===================== HELPERS =====================
 
     def _snap_point(self, p: Point) -> Point:
         x, y = p
         g = self.snap_grid
-        return (round(x / g) * g, round(y / g) * g)
+        return ((x // g) * g, (y // g) * g)
 
     def _snap_line(self, line: Line) -> Line:
         return (self._snap_point(line[0]), self._snap_point(line[1]))
@@ -176,12 +202,10 @@ class IntersectionDetector:
         return ((a[0] - b[0])**2 + (a[1] - b[1])**2) ** 0.5
 
     def _is_horizontal(self, line: Line) -> bool:
-        (x1, y1), (x2, y2) = line
-        return abs(y1 - y2) <= self.tolerance
+        return line[0][1] == line[1][1]
 
     def _is_vertical(self, line: Line) -> bool:
-        (x1, y1), (x2, y2) = line
-        return abs(x1 - x2) <= self.tolerance
+        return line[0][0] == line[1][0]
 
     def _on_segment(self, x: int, y: int, line: Line) -> bool:
         (x1, y1), (x2, y2) = line
@@ -226,12 +250,12 @@ class IntersectionDetector:
 
     def _axis_aligned_segment(self, a: Point, b: Point, wall: Line) -> Line:
         if self._is_horizontal(wall):
-            y_axis = int(round((wall[0][1] + wall[1][1]) / 2))
+            y_axis = (wall[0][1] // self.snap_grid) * self.snap_grid
             x1, x2 = sorted([a[0], b[0]])
             return (x1, y_axis), (x2, y_axis)
 
         if self._is_vertical(wall):
-            x_axis = int(round((wall[0][0] + wall[1][0]) / 2))
+            x_axis = (wall[0][0] // self.snap_grid) * self.snap_grid
             y1, y2 = sorted([a[1], b[1]])
             return (x_axis, y1), (x_axis, y2)
 
@@ -247,5 +271,66 @@ class IntersectionDetector:
             if key not in seen:
                 seen.add(key)
                 result.append((a, b))
+
+        return result
+
+    def _merge_collinear(self, walls: List[Line]) -> List[Line]:
+        if not walls:
+            return []
+
+        horizontal: dict[int, List[Tuple[int, int]]] = {}
+        vertical: dict[int, List[Tuple[int, int]]] = {}
+
+        for (x1, y1), (x2, y2) in walls:
+            if y1 == y2:
+                y = y1
+                a, b = sorted((x1, x2))
+                horizontal.setdefault(y, []).append((a, b))
+            elif x1 == x2:
+                x = x1
+                a, b = sorted((y1, y2))
+                vertical.setdefault(x, []).append((a, b))
+
+        merged: List[Line] = []
+
+        for y, ranges in horizontal.items():
+            ranges.sort()
+            cur_start, cur_end = ranges[0]
+            for start, end in ranges[1:]:
+                if start <= cur_end:
+                    cur_end = max(cur_end, end)
+                    continue
+                merged.append(((cur_start, y), (cur_end, y)))
+                cur_start, cur_end = start, end
+            merged.append(((cur_start, y), (cur_end, y)))
+
+        for x, ranges in vertical.items():
+            ranges.sort()
+            cur_start, cur_end = ranges[0]
+            for start, end in ranges[1:]:
+                if start <= cur_end:
+                    cur_end = max(cur_end, end)
+                    continue
+                merged.append(((x, cur_start), (x, cur_end)))
+                cur_start, cur_end = start, end
+            merged.append(((x, cur_start), (x, cur_end)))
+
+        return self._deduplicate(merged)
+
+    def _collapse_parallel(self, walls: List[Line]) -> List[Line]:
+        result: List[Line] = []
+
+        for w in walls:
+            keep = True
+            for r in result:
+                if (
+                    abs(w[0][0] - r[0][0]) < self.snap_grid and
+                    abs(w[0][1] - r[0][1]) < self.snap_grid
+                ):
+                    keep = False
+                    break
+
+            if keep:
+                result.append(w)
 
         return result

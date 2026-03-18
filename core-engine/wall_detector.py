@@ -9,6 +9,8 @@ Line = Tuple[Tuple[int, int], Tuple[int, int]]
 
 class WallDetector:
 
+    GRID = 10
+
     def __init__(
         self,
         canny_low: int = 50,
@@ -28,6 +30,9 @@ class WallDetector:
         self.orientation_tol = orientation_tol
         self.min_wall_length = min_wall_length
         self.use_adaptive_canny = use_adaptive_canny
+
+    def _snap(self, v: int) -> int:
+        return (v // self.GRID) * self.GRID
 
 
     def detect(self, images: List[np.ndarray]) -> List[List[Line]]:
@@ -50,6 +55,8 @@ class WallDetector:
             walls = self._filter_walls(lines)
 
             merged_walls = self._merge_walls(walls)
+
+            merged_walls = self._collapse_thickness(merged_walls)
 
             results.append(merged_walls)
 
@@ -163,13 +170,13 @@ class WallDetector:
             # Snap to perfect axis alignment
             if is_horizontal:
                 # Force y1 = y2 = average y
-                y_avg = int((y1 + y2) // 2)
-                x_start, x_end = sorted((x1, x2))
+                y_avg = self._snap((y1 + y2) // 2)
+                x_start, x_end = sorted((self._snap(x1), self._snap(x2)))
                 walls.append(((x_start, y_avg), (x_end, y_avg)))
             elif is_vertical:
                 # Force x1 = x2 = average x
-                x_avg = int((x1 + x2) // 2)
-                y_start, y_end = sorted((y1, y2))
+                x_avg = self._snap((x1 + x2) // 2)
+                y_start, y_end = sorted((self._snap(y1), self._snap(y2)))
                 walls.append(((x_avg, y_start), (x_avg, y_end)))
         
         return walls
@@ -181,7 +188,7 @@ class WallDetector:
         
         Steps:
         1. Separate lines into horizontal and vertical
-        2. Cluster by position (±10px tolerance)
+        2. Cluster by snapped grid coordinate
         3. Merge overlapping segments within each cluster
         4. Deduplicate results
         """
@@ -212,13 +219,101 @@ class WallDetector:
             unique_lines.add(normalized)
         
         return list(unique_lines)
+
+    def _collapse_thickness(self, walls: List[Line]) -> List[Line]:
+        """
+        Merge parallel walls representing thickness into single centerline.
+        """
+        if not walls:
+            return []
+
+        horizontal = []
+        vertical = []
+
+        for (x1, y1), (x2, y2) in walls:
+            if y1 == y2:
+                horizontal.append((y1, min(x1, x2), max(x1, x2)))
+            elif x1 == x2:
+                vertical.append((x1, min(y1, y2), max(y1, y2)))
+
+        def _overlap_or_touch(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
+            return not (a_end < b_start - self.GRID or b_end < a_start - self.GRID)
+
+        def _center_coord(coords: List[int]) -> int:
+            avg = sum(coords) / max(1, len(coords))
+            return int(round(avg / self.GRID) * self.GRID)
+
+        def _cluster_segments(segments: List[Tuple[int, int, int]], is_horizontal: bool) -> List[Line]:
+            if not segments:
+                return []
+
+            segments = sorted(segments, key=lambda s: (s[0], s[1], s[2]))
+            used = [False] * len(segments)
+            collapsed: List[Line] = []
+
+            for i, (coord_i, start_i, end_i) in enumerate(segments):
+                if used[i]:
+                    continue
+
+                used[i] = True
+                group_coords = [coord_i]
+                group_starts = [start_i]
+                group_ends = [end_i]
+
+                changed = True
+                while changed:
+                    changed = False
+                    current_min = min(group_starts)
+                    current_max = max(group_ends)
+                    current_coord = sum(group_coords) / len(group_coords)
+
+                    for j, (coord_j, start_j, end_j) in enumerate(segments):
+                        if used[j]:
+                            continue
+
+                        if abs(coord_j - current_coord) > self.GRID:
+                            continue
+
+                        if not _overlap_or_touch(current_min, current_max, start_j, end_j):
+                            continue
+
+                        used[j] = True
+                        group_coords.append(coord_j)
+                        group_starts.append(start_j)
+                        group_ends.append(end_j)
+                        changed = True
+
+                coord = _center_coord(group_coords)
+                span_start = min(group_starts)
+                span_end = max(group_ends)
+
+                if span_end - span_start < self.min_wall_length:
+                    continue
+
+                if is_horizontal:
+                    collapsed.append(((self._snap(span_start), coord), (self._snap(span_end), coord)))
+                else:
+                    collapsed.append(((coord, self._snap(span_start)), (coord, self._snap(span_end))))
+
+            return collapsed
+
+        collapsed = _cluster_segments(horizontal, is_horizontal=True)
+        collapsed.extend(_cluster_segments(vertical, is_horizontal=False))
+
+        unique = set()
+        for p1, p2 in collapsed:
+            if p1 == p2:
+                continue
+            unique.add((p1, p2))
+
+        return list(unique)
     
     def _cluster_and_merge_lines(self, lines: List[Line], is_horizontal: bool) -> List[Line]:
         """
         Cluster lines by position and merge overlapping segments.
         
-        For horizontal: cluster by y-coordinate (±10px)
-        For vertical: cluster by x-coordinate (±10px)
+        For horizontal: cluster by snapped y-coordinate.
+        For vertical: cluster by snapped x-coordinate.
         """
         if not lines:
             return []
@@ -236,7 +331,7 @@ class WallDetector:
     
     def _create_clusters(self, lines: List[Line], is_horizontal: bool) -> Dict[int, List[Line]]:
         """
-        Group lines by position with ±10px tolerance.
+        Group lines by snapped grid coordinate.
         """
         clusters: Dict[int, List[Line]] = defaultdict(list)
         
@@ -246,28 +341,12 @@ class WallDetector:
             # Get cluster key based on line orientation
             if is_horizontal:
                 # Cluster by y-coordinate
-                cluster_key = y1  # y1 == y2 for horizontal lines
+                cluster_key = self._snap(y1)  # y1 == y2 for horizontal lines
             else:
                 # Cluster by x-coordinate
-                cluster_key = x1  # x1 == x2 for vertical lines
-            
-            # Find matching cluster (within ±10px)
-            found = False
-            best_key = None
-            best_dist = None
-            for existing_key in list(clusters.keys()):
-                if abs(existing_key - cluster_key) <= 10:
-                    dist = abs(existing_key - cluster_key)
-                    if best_dist is None or dist < best_dist:
-                        best_key = existing_key
-                        best_dist = dist
+                cluster_key = self._snap(x1)  # x1 == x2 for vertical lines
 
-            if best_key is not None:
-                clusters[best_key].append(line)
-                found = True
-            
-            if not found:
-                clusters[cluster_key].append(line)
+            clusters[cluster_key].append(line)
         
         return clusters
     

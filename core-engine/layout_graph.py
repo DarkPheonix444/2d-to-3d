@@ -21,13 +21,22 @@ class LayoutGraph:
 
             self._validate_walls(walls)
 
+            walls = [
+                self._canonical_line(w)
+                for w in walls
+                if w[0][0] == w[1][0] or w[0][1] == w[1][1]
+            ]
+
             nodes = self._extract_nodes(walls)
 
             nodes = self._snap_nodes(nodes)
 
             graph = self._build_graph(nodes, walls)
+            graph = self._keep_cyclic_components(graph)
 
             rooms = self._detect_rooms(graph)
+
+
 
             layouts.append({
                 "nodes": nodes,
@@ -64,40 +73,7 @@ class LayoutGraph:
         return nodes
 
     def _snap_nodes(self, nodes: Set[Point]) -> Set[Point]:
-        node_list = list(nodes)
-
-        if not node_list:
-            return set()
-
-        visited = [False] * len(node_list)
-        clustered: Set[Point] = set()
-
-        for i, seed in enumerate(node_list):
-            if visited[i]:
-                continue
-
-            stack = [i]
-            visited[i] = True
-            cluster = [seed]
-
-            while stack:
-                idx = stack.pop()
-                p = node_list[idx]
-
-                for j, q in enumerate(node_list):
-                    if visited[j]:
-                        continue
-
-                    if self._dist(p, q) <= self.snap_tolerance:
-                        visited[j] = True
-                        stack.append(j)
-                        cluster.append(q)
-
-            cx = int(round(sum(p[0] for p in cluster) / len(cluster)))
-            cy = int(round(sum(p[1] for p in cluster) / len(cluster)))
-            clustered.add((cx, cy))
-
-        return clustered
+        return set(self._canonical_point(p) for p in nodes)
 
     def _build_graph(
         self,
@@ -109,16 +85,65 @@ class LayoutGraph:
 
         for p1, p2 in walls:
 
-            n1 = self._nearest_node(p1, nodes)
-            n2 = self._nearest_node(p2, nodes)
+            n1 = self._canonical_point(p1)
+            n2 = self._canonical_point(p2)
 
             if n1 == n2:
+                continue
+
+            if not (n1[0] == n2[0] or n1[1] == n2[1]):
+                continue
+
+            if n1 not in graph or n2 not in graph:
                 continue
 
             graph[n1].add(n2)
             graph[n2].add(n1)
 
         return {k: list(v) for k, v in graph.items()}
+
+    def _keep_cyclic_components(self, graph: Dict[Point, List[Point]]) -> Dict[Point, List[Point]]:
+        visited = set()
+        valid_nodes = set()
+
+        def dfs(start):
+            stack = [(start, None)]
+            local_nodes = set()
+            has_cycle = False
+
+            while stack:
+                node, parent = stack.pop()
+
+                if node in local_nodes:
+                    has_cycle = True
+                    continue
+
+                local_nodes.add(node)
+
+                for nbr in graph[node]:
+                    if nbr == parent:
+                        continue
+                    stack.append((nbr, node))
+
+            return local_nodes, has_cycle
+
+        for node in graph:
+            if node in visited:
+                continue
+
+            comp_nodes, has_cycle = dfs(node)
+            visited |= comp_nodes
+
+            if has_cycle:
+                valid_nodes |= comp_nodes
+
+        # rebuild graph
+        new_graph = {}
+        for node in valid_nodes:
+            new_graph[node] = [nbr for nbr in graph[node] if nbr in valid_nodes]
+
+        return new_graph
+
 
     def _detect_rooms(self, graph: Dict[Point, List[Point]]) -> List[List[Point]]:
         rooms: List[List[Point]] = []
@@ -159,7 +184,16 @@ class LayoutGraph:
 
         room = list(dict.fromkeys(room))
 
-        if len(room) < 4:
+        room = list(dict.fromkeys(room))
+
+        # 🔥 ADD THIS BLOCK
+        xs = {p[0] for p in room}
+        ys = {p[1] for p in room}
+
+        if len(xs) != 2 or len(ys) != 2:
+            return False
+
+        if len(room) != 4:
             return False
 
         if self._has_duplicate_or_near_duplicate_vertices(room):
@@ -322,20 +356,12 @@ class LayoutGraph:
 
         return [rooms[i] for i in range(len(rooms)) if keep[i]]
 
-    def _nearest_node(self, p: Point, nodes: Set[Point]) -> Point:
+    def _canonical_point(self, p: Point) -> Point:
+        return ((p[0] // 10) * 10, (p[1] // 10) * 10)
 
-        best = None
-        best_dist = float("inf")
-
-        for n in nodes:
-
-            d = self._dist(p, n)
-
-            if d < best_dist:
-                best = n
-                best_dist = d
-
-        return best
+    def _canonical_line(self, line: Line) -> Line:
+        p1, p2 = line
+        return self._canonical_point(p1), self._canonical_point(p2)
 
     def _dist(self, a: Point, b: Point) -> float:
 
