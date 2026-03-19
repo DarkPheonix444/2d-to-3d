@@ -39,7 +39,7 @@ class Normalizer:
         return processed_images
 
     def _should_apply_blur(self, gray: np.ndarray) -> bool:
-        # Estimate high-frequency speckle by comparing with median-smoothed image.
+
         median = cv2.medianBlur(gray, 3)
         noise_residual = cv2.absdiff(gray, median)
         noise_score = float(np.mean(noise_residual))

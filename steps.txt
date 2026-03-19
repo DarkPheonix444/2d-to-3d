@@ -23,3 +23,234 @@ WallDetector ✅
 Intersection ⚠️ (almost there)
 Graph ❌ (THIS is breaking everything)
 Room Detection ❌ (dependent on graph)
+
+
+Walls (raw, keep thickness)
+    ↓
+IntersectionDetector (split everything)
+    ↓
+Graph-aware filtering (remove garbage)
+    ↓
+Controlled extension (STRICT RULES)
+    ↓
+Re-run intersection + split
+    ↓
+Convergence check
+    ↓
+FINAL CLEANUP (very conservative)
+
+
+
+
+from typing import List, Tuple
+from collections import defaultdict
+
+Point = Tuple[int, int]
+Line = Tuple[Point, Point]
+
+
+class TopologyRefiner:
+
+    def __init__(self, intersection_detector, grid: int = 10, max_dist: int = 100):
+        self.intersection = intersection_detector
+        self.grid = grid
+        self.max_dist = max_dist
+
+    # ===================== PUBLIC =====================
+
+    def refine(self, walls: List[Line]) -> List[Line]:
+
+        current = walls
+
+        for _ in range(6):  # convergence loop
+
+            split = self.intersection.process([current])[0]
+
+
+
+            extended = self._extend_lines(split)
+            
+            # filtered = self._filter_structural(extended)
+
+            if set(extended) == set(current):
+                break
+
+            current = extended
+
+        # final stabilization
+        final = self.intersection.process([current])[0]
+
+        # final = self._remove_parallel_safe(final)
+
+        return final
+
+    # ===================== FILTER =====================
+
+    def _filter_structural(self, lines: List[Line]) -> List[Line]:
+        deg = defaultdict(int)
+        for a, b in lines:
+            deg[a] += 1
+            deg[b] += 1
+
+        return [l for l in lines if deg[l[0]] > 1 or deg[l[1]] > 1]
+
+    # ===================== EXTENSION =====================
+
+    def _extend_lines(self, lines: List[Line]) -> List[Line]:
+
+        deg = defaultdict(int)
+        for a, b in lines:
+            deg[a] += 1
+            deg[b] += 1
+
+        horiz = defaultdict(list)
+        vert = defaultdict(list)
+
+        for (x1, y1), (x2, y2) in lines:
+            if y1 == y2:
+                horiz[y1].append((min(x1, x2), max(x1, x2)))
+            else:
+                vert[x1].append((min(y1, y2), max(y1, y2)))
+
+        new_lines = []
+
+        for (x1, y1), (x2, y2) in lines:
+
+            extended = False
+
+            for P, Q in [((x1, y1), (x2, y2)), ((x2, y2), (x1, y1))]:
+
+                if deg[P] != 1:
+                    continue
+
+                x, y = P
+
+                dx = P[0] - Q[0]
+                dy = P[1] - Q[1]
+
+                best = None
+                best_dist = 1e9
+
+                # horizontal
+                if y1 == y2:
+                    for vx in vert:
+                        if abs(vx - x) <= self.max_dist:
+
+                            if dx > 0 and vx >= x:
+                                continue
+                            if dx < 0 and vx <= x:
+                                continue
+
+                            for y_start, y_end in vert[vx]:
+                                if y_start <= y <= y_end:
+
+                                    d = abs(vx - x)
+                                    candidate = (vx, y)
+
+                                    if 0 < d < best_dist:
+                                        best = candidate
+                                        best_dist = d
+
+                # vertical
+                else:
+                    for hy in horiz:
+                        if abs(hy - y) <= self.max_dist:
+
+                            if dy > 0 and hy >= y:
+                                continue
+                            if dy < 0 and hy <= y:
+                                continue
+
+                            for x_start, x_end in horiz[hy]:
+                                if x_start <= x <= x_end:
+
+                                    d = abs(hy - y)
+                                    candidate = (x, hy)
+
+                                    if 0 < d < best_dist:
+                                        best = candidate
+                                        best_dist = d
+
+                if best:
+                    new_lines.append((Q, best))
+                    new_lines.append((P, Q))
+                    extended = True
+                    print("EXTEND:", P, "→", best)
+                    break
+
+            if not extended:
+                new_lines.append(((x1, y1), (x2, y2)))
+
+        return new_lines
+
+    # ===================== PARALLEL REDUCTION =====================
+
+    def _remove_parallel_safe(self, lines: List[Line]) -> List[Line]:
+
+        used = set()
+        result = []
+
+        for i in range(len(lines)):
+            if i in used:
+                continue
+
+            (x1, y1), (x2, y2) = lines[i]
+            group = [i]
+
+            for j in range(i + 1, len(lines)):
+                if j in used:
+                    continue
+
+                (a1, b1), (a2, b2) = lines[j]
+
+                if (y1 == y2 and b1 == b2) or (x1 == x2 and a1 == a2):
+                    if abs(x1 - a1) <= self.grid and abs(y1 - b1) <= self.grid:
+                        group.append(j)
+
+            best = max(group, key=lambda k: (
+                abs(lines[k][0][0] - lines[k][1][0]) +
+                abs(lines[k][0][1] - lines[k][1][1])
+            ))
+
+            result.append(lines[best])
+
+            for g in group:
+                used.add(g)
+
+        return result
+
+    # ===================== CLEANUP =====================
+
+    def _remove_isolated(self, lines: List[Line]) -> List[Line]:
+        deg = defaultdict(int)
+        for a, b in lines:
+            deg[a] += 1
+            deg[b] += 1
+
+        return [l for l in lines if deg[l[0]] > 1 or deg[l[1]] > 1]
+    
+    def _is_blocked(self, x, y, target, horiz, vert, is_horizontal):
+        tx, ty = target
+
+        if is_horizontal:
+            # moving left/right → check horizontal blockers
+            y_line = y
+            x1, x2 = sorted([x, tx])
+
+            for a, b in horiz.get(y_line, []):
+                if a < x2 and b > x1:
+                    if not (a == x and b == tx):
+                        return True
+
+        else:
+            # moving up/down → check vertical blockers
+            x_line = x
+            y1, y2 = sorted([y, ty])
+
+            for a, b in vert.get(x_line, []):
+                if a < y2 and b > y1:
+                    if not (a == y and b == ty):
+                        return True
+
+        return False
+    
