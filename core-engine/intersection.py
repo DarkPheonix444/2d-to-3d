@@ -6,7 +6,7 @@ Line = Tuple[Point, Point]
 
 class IntersectionDetector:
 
-    def __init__(self, tolerance: int = 8, snap_grid: int = 10):
+    def __init__(self, tolerance: int = 4, snap_grid: int = 10):
         self.tolerance = tolerance
         self.snap_grid = snap_grid
 
@@ -17,7 +17,7 @@ class IntersectionDetector:
 
         for walls in floors:
             intersections = self._find_intersections(walls)
-
+                      
             split_walls = self._split_walls(walls, intersections)
 
             results.append(split_walls)
@@ -50,7 +50,7 @@ class IntersectionDetector:
                         continue
 
                     if self._point_on_line(p, other) and not self._is_near_any_endpoint(p, other):
-                        points.add(p)
+                        points.add(self._snap_point(p))
 
         return list(points)
 
@@ -74,7 +74,7 @@ class IntersectionDetector:
         if not self._on_segment(v_x, h_y, v):
             return None
 
-        return (v_x, h_y)
+        return self._snap_point((v_x, h_y))
 
     # ===================== SPLIT =====================
 
@@ -94,22 +94,24 @@ class IntersectionDetector:
 
                 if self._is_horizontal(wall):
                     if abs(py - y1) <= self.tolerance and min(x1, x2) <= px <= max(x1, x2):
-                        pts.add((px, y1))
+                        pts.add(self._snap_point((px, y1)))
 
                 elif self._is_vertical(wall):
                     if abs(px - x1) <= self.tolerance and min(y1, y2) <= py <= max(y1, y2):
-                        pts.add((x1, py))
+                        pts.add(self._snap_point((x1, py)))
 
             pts = list(pts)
-            pts.sort(key=lambda p: (p[0], p[1]))
-
+            if self._is_horizontal(wall):
+                pts.sort(key=lambda p: p[0])  # sort by x
+            else:
+                pts.sort(key=lambda p: p[1])  # sort by y
             for i in range(len(pts) - 1):
                 p1, p2 = pts[i], pts[i + 1]
 
                 if p1 == p2:
                     continue
 
-                if self._length(p1, p2) < self.snap_grid * 2:
+                if self._length(p1, p2) < self.snap_grid*2:
                     continue
 
                 new_walls.append((p1, p2))
@@ -179,7 +181,9 @@ class IntersectionDetector:
             segs.sort()
             s,e = segs[0]
             for ns,ne in segs[1:]:
-                if ns <= e: e = max(e, ne)
+                gap = ns - e
+                if ns <= e + self.snap_grid//2:
+                    e = max(e, ne)
                 else:
                     merged.append(((s,y),(e,y)))
                     s,e = ns,ne
@@ -189,7 +193,9 @@ class IntersectionDetector:
             segs.sort()
             s,e = segs[0]
             for ns,ne in segs[1:]:
-                if ns <= e: e = max(e, ne)
+                gap = ns - e
+                if ns <= e + self.snap_grid//2:
+                    e = max(e, ne)
                 else:
                     merged.append(((x,s),(x,e)))
                     s,e = ns,ne

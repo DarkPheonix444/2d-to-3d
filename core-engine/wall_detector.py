@@ -15,7 +15,7 @@ class WallDetector:
         self,
         canny_low=50,
         canny_high=150,
-        hough_threshold=100,
+        hough_threshold=50,
         min_line_length=25,
         max_line_gap=20,
         orientation_tol=15,
@@ -91,11 +91,10 @@ class WallDetector:
             edges,
             1,
             np.pi / 180,
-            threshold=80,
-            minLineLength=50,
-            maxLineGap=10
+            threshold=self.hough_threshold,
+            minLineLength=self.min_line_length,
+            maxLineGap=self.max_line_gap
         )
-    
 
     # ===================== FILTER =====================
 
@@ -134,6 +133,21 @@ class WallDetector:
                 walls.append(((x, y1), (x, y2)))
 
         return walls
+    # proces structure 
+    def _preprocess_structure(self, img):
+        _, bin_img = cv2.threshold(img, 200, 255, cv2.THRESH_BINARY_INV)
+
+        # 🔥 horizontal closing (fix divider)
+        h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 3))
+        h_closed = cv2.morphologyEx(bin_img, cv2.MORPH_CLOSE, h_kernel)
+
+        # 🔥 vertical closing
+        v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 15))
+        v_closed = cv2.morphologyEx(bin_img, cv2.MORPH_CLOSE, v_kernel)
+
+        combined = cv2.bitwise_or(h_closed, v_closed)
+
+        return combined
 
     # ===================== 🔥 KEY FIX =====================
 

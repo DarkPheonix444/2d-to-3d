@@ -7,7 +7,7 @@ Line = Tuple[Point, Point]
 
 class TopologyRefiner:
 
-    def __init__(self, intersection_detector, grid: int = 10, max_dist: int = 100):
+    def __init__(self, intersection_detector, grid: int = 10, max_dist: int = 20):
         self.intersection = intersection_detector
         self.grid = grid
         self.max_dist = max_dist
@@ -127,7 +127,7 @@ class TopologyRefiner:
                 # Find valid target on vertical wall
                 for y_start, y_end in vert[vx]:
                     if y_start - self.grid <= y <= y_end + self.grid:
-                        if 0 < dist < best_dist:
+                        if self.grid <= dist < best_dist:
                             best = (vx, y)
                             best_dist = dist
 
@@ -153,7 +153,7 @@ class TopologyRefiner:
                 # Find valid target on horizontal wall
                 for x_start, x_end in horiz[hy]:
                     if x_start - self.grid <= x <= x_end + self.grid:
-                        if 0 < dist < best_dist:
+                        if self.grid <= dist < best_dist:
                             best = (x, hy)
                             best_dist = dist
 
