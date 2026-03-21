@@ -115,7 +115,7 @@ def draw_overlay_debug(
 
 
 def main():
-    path = "core-engine/floor2.png"
+    path = "core-engine/images/test1.jpg"
 
     result = control.process(path)
 

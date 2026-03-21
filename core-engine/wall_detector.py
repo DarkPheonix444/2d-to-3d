@@ -1,294 +1,83 @@
 import cv2
 import numpy as np
-from typing import List, Tuple, Optional
-from collections import defaultdict
+from typing import List, Tuple
 
 Line = Tuple[Tuple[int, int], Tuple[int, int]]
 
 
 class WallDetector:
 
-    GRID = 10
-    THICKNESS_TOL = 15  # max distance to consider parallel walls
+    def __init__(self, debug=True):
+        self.debug = debug
 
-    def __init__(
-        self,
-        canny_low=50,
-        canny_high=150,
-        hough_threshold=50,
-        min_line_length=25,
-        max_line_gap=20,
-        orientation_tol=15,
-        min_wall_length=40,
-        use_adaptive_canny=True
-    ):
-        self.canny_low = canny_low
-        self.canny_high = canny_high
-        self.hough_threshold = hough_threshold
-        self.min_line_length = min_line_length
-        self.max_line_gap = max_line_gap
-        self.orientation_tol = orientation_tol
-        self.min_wall_length = min_wall_length
-        self.use_adaptive_canny = use_adaptive_canny
-
-    # ===================== CORE =====================
+    # ===================== MAIN =====================
 
     def detect(self, images: List[np.ndarray]) -> List[List[Line]]:
         results = []
 
-        for img in images:
-            gray = self._to_gray(img)
-            gray = self._preprocess_structure(gray)
-            edges = self._detect_edges(gray)
-            lines = self._detect_lines(edges)
+        for idx, img in enumerate(images):
 
-            walls = self._filter_walls(lines)
+            skel = self._skeletonize(img)
 
-            # 🔥 FIX 1: SNAP EARLY
-            walls = self._snap_all(walls)
+            lines = self._detect_hough(skel)
 
-            # 🔥 FIX 2: COLLAPSE THICK WALLS
-            walls = self._collapse_parallel(walls)
-            walls = self._snap_all(walls)
-            # 🔥 FIX 3: MERGE CLEANLY
-            walls = self._merge_walls(walls)
-            walls= self._filter_small(walls)
+            results.append(lines)
 
-            results.append(walls)
+            if self.debug:
+                print(f"[IMAGE {idx+1}] RAW DETECTED: {len(lines)}")
+                self._show(img, lines, f"RAW_{idx+1}")
 
         return results
 
-    # ===================== BASIC =====================
+    # ===================== CORE =====================
 
-    def _snap(self, v: int) -> int:
-        return int(round(v / self.GRID) * self.GRID)
+    def _skeletonize(self, img):
+        from skimage.morphology import skeletonize
+        return (skeletonize(img > 0) * 255).astype(np.uint8)
 
-    def _snap_all(self, walls: List[Line]) -> List[Line]:
-        snapped = []
-        for (x1, y1), (x2, y2) in walls:
-            snapped.append((
-                (self._snap(x1), self._snap(y1)),
-                (self._snap(x2), self._snap(y2))
-            ))
-        return snapped
+    def _detect_hough(self, img):
 
-    def _to_gray(self, image):
-        if image.ndim == 2:
-            return image
-        return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-    def _detect_edges(self, image):
-        if not self.use_adaptive_canny:
-            return cv2.Canny(image, self.canny_low, self.canny_high)
-
-        median = np.median(image)
-        low = int(max(0, 0.66 * median))
-        high = int(min(255, 1.33 * median))
-        return cv2.Canny(image, low, high)
-
-    def _detect_lines(self, edges):
-        return cv2.HoughLinesP(
-            edges,
-            1,
-            np.pi / 180,
-            threshold=self.hough_threshold,
-            minLineLength=self.min_line_length,
-            maxLineGap=self.max_line_gap
+        # 🔥 tuned for HIGH RECALL (not precision)
+        lines = cv2.HoughLinesP(
+            img,
+            rho=1,
+            theta=np.pi / 180,
+            threshold=30,        # lower = more lines
+            minLineLength=10,    # small allowed
+            maxLineGap=15        # allow broken walls
         )
 
-    # ===================== FILTER =====================
+        results = []
 
-    def _filter_walls(self, lines):
-        walls = []
-        if lines is None:
-            return walls
+        if lines is not None:
+            for l in lines:
+                x1, y1, x2, y2 = l[0]
 
-        for l in lines:
-            x1, y1, x2, y2 = l[0]
+                # keep everything except zero-length
+                if (x1, y1) != (x2, y2):
+                    results.append(((x1, y1), (x2, y2)))
 
-            dx = x2 - x1
-            dy = y2 - y1
+        return results
 
-            angle = abs(np.degrees(np.arctan2(dy, dx)))
-            if angle > 180:
-                angle -= 180
+    # ===================== DEBUG =====================
 
-            is_h = angle < self.orientation_tol or abs(angle - 180) < self.orientation_tol
-            is_v = abs(angle - 90) < self.orientation_tol
+    def _show(self, img, lines, title):
+        vis = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
-            if not (is_h or is_v):
-                continue
+        for (x1, y1), (x2, y2) in lines:
+            cv2.line(vis, (x1, y1), (x2, y2), (0, 0, 255), 1)
 
-            length = np.hypot(dx, dy)
-            if length < self.min_wall_length:
-                continue
+        # 🔥 Resize logic (maintain aspect ratio)
+        max_size = 900  # max width/height
 
-            if is_h:
-                y = int(round((y1 + y2) / 2))
-                x1, x2 = sorted([x1, x2])
-                walls.append(((x1, y), (x2, y)))
-            else:
-                x = int(round((x1 + x2) / 2))
-                y1, y2 = sorted([y1, y2])
-                walls.append(((x, y1), (x, y2)))
+        h, w = vis.shape[:2]
+        scale = min(max_size / w, max_size / h)
 
-        return walls
-    # proces structure 
-    def _preprocess_structure(self, img):
-        _, bin_img = cv2.threshold(img, 200, 255, cv2.THRESH_BINARY_INV)
+        if scale < 1:  # only shrink, never enlarge
+            new_w = int(w * scale)
+            new_h = int(h * scale)
+            vis = cv2.resize(vis, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
-        # 🔥 horizontal closing (fix divider)
-        h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 3))
-        h_closed = cv2.morphologyEx(bin_img, cv2.MORPH_CLOSE, h_kernel)
-
-        # 🔥 vertical closing
-        v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 15))
-        v_closed = cv2.morphologyEx(bin_img, cv2.MORPH_CLOSE, v_kernel)
-
-        combined = cv2.bitwise_or(h_closed, v_closed)
-
-        return combined
-
-    # ===================== 🔥 KEY FIX =====================
-
-    def _collapse_parallel(self, walls: List[Line]) -> List[Line]:
-        """
-        Convert double-line walls → single centerline
-        """
-
-        horizontal = []
-        vertical = []
-
-        for (x1, y1), (x2, y2) in walls:
-            if y1 == y2:
-                horizontal.append(((x1, y1), (x2, y2)))
-            else:
-                vertical.append(((x1, y1), (x2, y2)))
-
-        collapsed = []
-
-        # ---- Horizontal collapse ----
-        used = set()
-        for i in range(len(horizontal)):
-            if i in used:
-                continue
-
-            (x1, y1), (x2, y2) = horizontal[i]
-            group = [(x1, x2, y1)]
-            used.add(i)
-
-            for j in range(i + 1, len(horizontal)):
-                if j in used:
-                    continue
-
-                (xx1, yy1), (xx2, yy2) = horizontal[j]
-
-                current_center = np.mean([g[2] for g in group])
-                if abs(yy1 - current_center) <= self.THICKNESS_TOL:
-                    # Overlap check
-                    if not (xx2 < x1 or xx1 > x2):
-                        group.append((xx1, xx2, yy1))
-                        used.add(j)
-
-            # Collapse group → centerline
-            xs = []
-            ys = []
-            for gx1, gx2, gy in group:
-                xs.append(gx1)
-                xs.append(gx2)
-                ys.append(gy)
-
-            y_center = int(round(np.mean(ys)))
-            collapsed.append(((min(xs), y_center), (max(xs), y_center)))
-
-        # ---- Vertical collapse ----
-        used = set()
-        for i in range(len(vertical)):
-            if i in used:
-                continue
-
-            (x1, y1), (x2, y2) = vertical[i]
-            group = [(y1, y2, x1)]
-            used.add(i)
-
-            for j in range(i + 1, len(vertical)):
-                if j in used:
-                    continue
-
-                (xx1, yy1), (xx2, yy2) = vertical[j]
-
-                current_center = np.mean([g[2] for g in group])
-                if abs(xx1 - current_center) <= self.THICKNESS_TOL:
-                    if not (yy2 < y1 or yy1 > y2):
-                        group.append((yy1, yy2, xx1))
-                        used.add(j)
-
-            ys = []
-            xs = []
-            for gy1, gy2, gx in group:
-                ys.append(gy1)
-                ys.append(gy2)
-                xs.append(gx)
-
-            x_center = int(round(np.mean(xs)))
-            collapsed.append(((x_center, min(ys)), (x_center, max(ys))))
-
-        return collapsed
-
-    # ===================== MERGE =====================
-
-    def _merge_walls(self, walls):
-        horizontal = defaultdict(list)
-        vertical = defaultdict(list)
-
-        # group
-        for (x1, y1), (x2, y2) in walls:
-            if y1 == y2:
-                horizontal[y1].append((min(x1, x2), max(x1, x2)))
-            else:
-                vertical[x1].append((min(y1, y2), max(y1, y2)))
-
-        merged = []
-
-        GAP = self.GRID  # 🔥 control knob (10 px)
-
-        # ---------- HORIZONTAL ----------
-        for y, segs in horizontal.items():
-            segs.sort()
-            s, e = segs[0]
-
-            for ns, ne in segs[1:]:
-                gap = ns - e
-
-                # ✅ merge only if overlap OR small gap
-                if gap <= GAP:
-                    e = max(e, ne)
-                else:
-                    merged.append(((s, y), (e, y)))
-                    s, e = ns, ne
-
-            merged.append(((s, y), (e, y)))
-
-        # ---------- VERTICAL ----------
-        for x, segs in vertical.items():
-            segs.sort()
-            s, e = segs[0]
-
-            for ns, ne in segs[1:]:
-                gap = ns - e
-
-                if gap <= GAP:
-                    e = max(e, ne)
-                else:
-                    merged.append(((x, s), (x, e)))
-                    s, e = ns, ne
-
-            merged.append(((x, s), (x, e)))
-
-        return merged
-    
-    def _filter_small(self, walls):
-        return [
-            w for w in walls
-            if abs(w[0][0]-w[1][0]) + abs(w[0][1]-w[1][1]) >= self.GRID * 2
-        ]
+        cv2.imshow(title, vis)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()

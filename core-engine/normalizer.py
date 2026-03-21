@@ -6,41 +6,43 @@ from typing import List
 
 class Normalizer:
 
-    def __init__(self,target_width:int=1500):
-        self.target_width = target_width
+    def __init__(self, debug: bool = True):
+        self.debug = debug
 
-    def normalize(self,images:List[Image.Image])->List[np.ndarray]:
-        if not isinstance(images, list):
-            raise TypeError("images must be a list of PIL.Image objects")
-
-        processed_images: List[np.ndarray] = []
+    def normalize(self, images: List[Image.Image]) -> List[np.ndarray]:
+        processed = []
 
         for idx, img in enumerate(images):
+
             if not isinstance(img, Image.Image):
-                raise TypeError(f"images[{idx}] must be a PIL.Image.Image")
+                raise TypeError(f"images[{idx}] must be PIL.Image")
 
-            if img.width == 0 or img.height == 0:
-                raise ValueError(f"images[{idx}] has invalid size: {img.size}")
+            # STEP 1: GRAYSCALE
+            img_np = np.asarray(img.convert("RGB"), dtype=np.uint8)
+            gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
 
-            try:
-                img_rgb = img.convert("RGB")
-            except Exception as exc:
-                raise ValueError(f"images[{idx}] cannot be converted to RGB") from exc
+            # STEP 2: LIGHT BLUR (only to reduce noise)
+            blurred = cv2.GaussianBlur(gray, (5, 5), 0)
 
-            img_np = np.asarray(img_rgb, dtype=np.uint8)
-            bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
-            gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+            # STEP 3: EDGE DETECTION (IMPORTANT SHIFT)
+            edges = cv2.Canny(blurred, 50, 150)
 
-            if min(gray.shape[:2]) >= 3 and self._should_apply_blur(gray):
-                gray = cv2.GaussianBlur(gray, (3, 3), 0)
+            processed.append(edges)
 
-            processed_images.append(gray)
+            if self.debug:
+                self._show_debug(idx, gray, blurred, edges)
 
-        return processed_images
+        return processed
 
-    def _should_apply_blur(self, gray: np.ndarray) -> bool:
+    def _show_debug(self, idx, gray, blurred, edges):
+        def resize(img):
+            h, w = img.shape[:2]
+            scale = 600 / max(h, w)
+            return cv2.resize(img, (int(w * scale), int(h * scale)))
 
-        median = cv2.medianBlur(gray, 3)
-        noise_residual = cv2.absdiff(gray, median)
-        noise_score = float(np.mean(noise_residual))
-        return noise_score > 4.0
+        cv2.imshow(f"[{idx}] Gray", resize(gray))
+        cv2.imshow(f"[{idx}] Blurred", resize(blurred))
+        cv2.imshow(f"[{idx}] Edges", resize(edges))
+
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
