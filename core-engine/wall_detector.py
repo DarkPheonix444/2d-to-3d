@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 
 Line = Tuple[Tuple[int, int], Tuple[int, int]]
 
@@ -10,91 +10,118 @@ class WallDetector:
     def __init__(self, debug=True):
         self.debug = debug
 
+        self.config_ratios = [
+            {"th": 120, "len": 0.04, "gap": 0.005},
+            {"th": 100, "len": 0.03, "gap": 0.008},
+            {"th": 80,  "len": 0.02, "gap": 0.01},
+            {"th": 60,  "len": 0.015, "gap": 0.015},
+            {"th": 40,  "len": 0.01, "gap": 0.02},
+        ]
+
     # ===================== MAIN =====================
 
-    def detect(self, images: List[np.ndarray]) -> List[List[Line]]:
-        results = []
+    def detect(self, images: List[Dict[str, np.ndarray]]) -> List[List[Line]]:
+        all_results = []
 
-        for idx, img in enumerate(images):
+        for idx, item in enumerate(images):
 
-            # ---- PREPROCESS (LIGHT, NOT AGGRESSIVE) ----
-            kernel = np.ones((3, 3), np.uint8)
-            processed = cv2.dilate(img, kernel, iterations=1)
+            for mode in ["skeleton", "stabilized"]:
+                img = item[mode]
+                h, w = img.shape
+                scale = np.hypot(h, w)
 
-            detected = []
+                if self.debug:
+                    print(f"\n[Image {idx}] Mode: {mode}")
 
-            # ===================== STAGE 1 (STRICT) =====================
-            lines1 = cv2.HoughLinesP(
-                processed,
-                rho=1,
-                theta=np.pi / 180,
-                threshold=80,
-                minLineLength=30,
-                maxLineGap=15
-            )
+                for i, cfg in enumerate(self.config_ratios):
 
-            # ===================== STAGE 2 (RELAXED) =====================
-            lines2 = cv2.HoughLinesP(
-                processed,
-                rho=1,
-                theta=np.pi / 180,
-                threshold=40,
-                minLineLength=30,
-                maxLineGap=30
-            )
+                    params = {
+                        "threshold": cfg["th"],
+                        "minLineLength": int(cfg["len"] * scale),
+                        "maxLineGap": int(cfg["gap"] * scale),
+                    }
 
-            # ---- COMBINE BOTH ----
-            for lines in [lines1, lines2]:
-                if lines is None:
-                    continue
+                    lines = self._detect_single(img, params)
 
-                for l in lines:
-                    x1, y1, x2, y2 = l[0]
+                    if self.debug:
+                        print(f"  Config {i}: {len(lines)} lines")
 
-                    dx, dy = x2 - x1, y2 - y1
-                    angle = abs(np.degrees(np.arctan2(dy, dx)))
+                        self._show(
+                            img,
+                            lines,
+                            title=f"[Img {idx}] {mode} | Config {i}"
+                        )
 
-                    # ---- ORIENTATION FILTER ----
-                    if not (
-                        angle < 10 or
-                        abs(angle - 90) < 10 or
-                        abs(angle - 180) < 10
-                    ):
-                        continue
+                    all_results.append(lines)
 
-                    detected.append(((x1, y1), (x2, y2)))
+        return all_results
 
-            # ===================== REMOVE SMALL LINES =====================
-            detected = self._remove_small(detected, min_len=15)
+    # ===================== SINGLE DETECTION =====================
 
-            if self.debug:
-                print(f"[{idx}] detected (after cleanup): {len(detected)}")
-                self._show(img, detected, idx)
+    def _detect_single(self, img, cfg) -> List[Line]:
 
-            results.append(detected)
+        lines = cv2.HoughLinesP(
+            img,
+            rho=1,
+            theta=np.pi / 180,
+            threshold=cfg["threshold"],
+            minLineLength=cfg["minLineLength"],
+            maxLineGap=cfg["maxLineGap"]
+        )
 
-        return results
+        detected = []
+
+        if lines is None:
+            return detected
+
+        for l in lines:
+            x1, y1, x2, y2 = l[0]
+
+            dx, dy = x2 - x1, y2 - y1
+            angle = abs(np.degrees(np.arctan2(dy, dx)))
+
+            if not (
+                angle < 10 or
+                abs(angle - 90) < 10 or
+                abs(angle - 180) < 10
+            ):
+                continue
+
+            detected.append(((x1, y1), (x2, y2)))
+
+        return detected
 
     # ===================== HELPERS =====================
 
-    def _remove_small(self, lines: List[Line], min_len=15) -> List[Line]:
-        res = []
+    # def _remove_small(self, lines: List[Line], shape) -> List[Line]:
+    #     h, w = shape
+    #     scale = np.hypot(h, w)
 
-        for (x1, y1), (x2, y2) in lines:
-            length = ((x2 - x1)**2 + (y2 - y1)**2) ** 0.5
-            if length >= min_len:
-                res.append(((x1, y1), (x2, y2)))
+    #     min_len = 0.01 * scale
 
-        return res
+    #     res = []
+    #     for (x1, y1), (x2, y2) in lines:
+    #         length = ((x2 - x1)**2 + (y2 - y1)**2) ** 0.5
+    #         if length >= min_len:
+    #             res.append(((x1, y1), (x2, y2)))
 
-    # ===================== VISUAL =====================
+    #     return res
 
-    def _show(self, img, lines, idx):
+    # ===================== VISUALIZATION =====================
+
+    def _resize_for_display(self, img, max_width=900, max_height=700):
+        h, w = img.shape[:2]
+        scale = min(max_width / w, max_height / h, 1.0)
+        return cv2.resize(img, (int(w * scale), int(h * scale)))
+
+    def _show(self, img, lines, title=""):
         vis = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
         for (x1, y1), (x2, y2) in lines:
             cv2.line(vis, (x1, y1), (x2, y2), (0, 0, 255), 2)
 
-        cv2.imshow(f"detected_{idx}", vis)
+        vis = self._resize_for_display(vis)
+
+        cv2.imshow(title, vis)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
