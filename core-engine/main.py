@@ -2,10 +2,10 @@ import cv2
 import os
 from PIL import Image
 
-from normalizer import Normalizer
-from wall_detector import WallDetector
+from core.normalizer import Normalizer
+from core.wall_detector import WallDetector
 from line_normalizer import LineNormalizer
-from merger import MergeSystem
+from core.merger import MergeSystem
 from line_refiner import LineRefiner
 
 

@@ -107,19 +107,26 @@ class MergeSystem:
         (x1, y1), (x2, y2) = l1
         (xx1, yy1), (xx2, yy2) = l2
 
-        horiz1 = abs(y1 - y2) < self.align_tol
-        horiz2 = abs(yy1 - yy2) < self.align_tol
+        angle1 = self._angle(l1)
+        angle2 = self._angle(l2)
 
-        vert1 = abs(x1 - x2) < self.align_tol
-        vert2 = abs(xx1 - xx2) < self.align_tol
+        # --- robust angle check ---
+        if self._angle_diff(angle1, angle2) > 10:
+            return False
 
-        # horizontal
-        if horiz1 and horiz2:
+        # --- classify orientation using angle ---
+        is_horizontal = (
+            abs(angle1 - 0) < 10 or abs(angle1 - 180) < 10
+        )
+        is_vertical = abs(angle1 - 90) < 10
+
+        # --- horizontal case ---
+        if is_horizontal:
             if abs(y1 - yy1) < self.align_tol:
                 return self._overlap(x1, x2, xx1, xx2)
 
-        # vertical
-        if vert1 and vert2:
+        # --- vertical case ---
+        if is_vertical:
             if abs(x1 - xx1) < self.align_tol:
                 return self._overlap(y1, y2, yy1, yy2)
 
@@ -144,6 +151,15 @@ class MergeSystem:
     def _length(self, l: Line):
         (x1, y1), (x2, y2) = l
         return np.hypot(x2 - x1, y2 - y1)
+    
+    def _angle(self, l):
+        (x1, y1), (x2, y2) = l
+        return abs(np.degrees(np.arctan2(y2 - y1, x2 - x1))) % 180
+
+
+    def _angle_diff(self, a, b):
+        diff = abs(a - b) % 180
+        return min(diff, 180 - diff)
 
     # ===================== VISUALIZATION =====================
 
@@ -231,3 +247,4 @@ class MergeSystem:
         h, w = img.shape[:2]
         scale = min(max_w / w, max_h / h, 1.0)
         return cv2.resize(img, (int(w * scale), int(h * scale)))
+    

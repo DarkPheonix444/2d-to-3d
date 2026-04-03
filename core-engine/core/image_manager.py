@@ -3,8 +3,8 @@ import mimetypes
 from typing import List
 from PIL import Image
 
-from pdftoimage import PDFToImage
-from imageloader import ImageLoader
+from core.pdftoimage import PDFToImage
+from core.imageloader import ImageLoader
 
 
 supported_image_types=[
