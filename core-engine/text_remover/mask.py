@@ -53,12 +53,12 @@ class MaskApplier:
             gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
         )
 
-        # remove small noise
-        kernel = np.ones((3, 3), np.uint8)
-        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+        # # remove small noise
+        # kernel = np.ones((3, 3), np.uint8)
+        # binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
 
-        # smooth tiny artifacts
-        binary = cv2.medianBlur(binary, 3)
+        # # smooth tiny artifacts
+        # binary = cv2.medianBlur(binary, 3)
 
         # invert back
         binary = cv2.bitwise_not(binary)

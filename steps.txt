@@ -12,3 +12,11 @@ Input
  → Semantic Model (ONLY here)
 
  → Final Graph
+
+ Walls
+ → TopologyRefiner
+ → Graph
+ → Cycles
+ → Sort by area
+ → Remove inner cycles
+ → Rooms

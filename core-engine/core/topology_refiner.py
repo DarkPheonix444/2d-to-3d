@@ -1,4 +1,4 @@
-from typing import List, Tuple, Dict, Set
+from typing import List, Tuple
 from collections import defaultdict
 import cv2
 
@@ -22,17 +22,23 @@ class TopologyRefiner:
 
         for _ in range(5):
 
-            # ensure clean splits
-            split = self.intersection.process([current])[0]
+            # ---------- FIXED INTERSECTION CALL ----------
+            split_data = self.intersection.split(
+                [{"line": l, "votes": 1} for l in current]
+            )
+            split = [d["line"] for d in split_data]
 
-            # snap again after split
+            # ---------- SNAP ----------
             split = self._snap_lines(split)
 
-            # extend
+            # ---------- EXTEND ----------
             extended = self._extend_lines(split)
 
-            # clean
-            cleaned = self._deduplicate(extended)
+            # ---------- 🔥 NEW: GLOBAL CONNECTION ----------
+            connected = self._snap_endpoints_global(extended)
+
+            # ---------- CLEAN ----------
+            cleaned = self._deduplicate(connected)
 
             if set(cleaned) == set(current):
                 break
@@ -102,21 +108,22 @@ class TopologyRefiner:
 
             # extend start
             if deg[start] == 1:
-                ext = self._find_extension(start, end, is_horizontal, horiz, vert, lines)
+                ext = self._find_extension(start, end, is_horizontal, horiz, vert)
                 if ext:
                     start = ext
 
             # extend end
             if deg[end] == 1:
-                ext = self._find_extension(end, start, is_horizontal, horiz, vert, lines)
+                ext = self._find_extension(end, start, is_horizontal, horiz, vert)
                 if ext:
                     end = ext
 
-            new_lines.append((start, end))
+            if start != end:
+                new_lines.append((start, end))
 
         return new_lines
 
-    def _find_extension(self, endpoint, other_end, is_horizontal, horiz, vert, lines):
+    def _find_extension(self, endpoint, other_end, is_horizontal, horiz, vert):
 
         x, y = endpoint
         ox, oy = other_end
@@ -165,6 +172,47 @@ class TopologyRefiner:
                             best_dist = dist
 
         return best
+
+    # ===================== 🔥 GLOBAL SNAP =====================
+
+    def _snap_endpoints_global(self, lines: List[Line]) -> List[Line]:
+
+        points = list({p for l in lines for p in l})
+        parent = {}
+
+        def find(p):
+            while parent[p] != p:
+                parent[p] = parent[parent[p]]
+                p = parent[p]
+            return p
+
+        def union(a, b):
+            pa, pb = find(a), find(b)
+            if pa != pb:
+                parent[pb] = pa
+
+        # init
+        for p in points:
+            parent[p] = p
+
+        # union close points
+        for i in range(len(points)):
+            for j in range(i + 1, len(points)):
+                p, q = points[i], points[j]
+                if abs(p[0] - q[0]) <= self.tol and abs(p[1] - q[1]) <= self.tol:
+                    union(p, q)
+
+        # map representatives
+        rep_map = {p: find(p) for p in points}
+
+        new_lines = []
+        for a, b in lines:
+            a = rep_map[a]
+            b = rep_map[b]
+            if a != b:
+                new_lines.append((a, b))
+
+        return new_lines
 
     # ===================== UTIL =====================
 
