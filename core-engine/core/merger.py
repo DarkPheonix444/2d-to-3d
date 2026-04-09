@@ -111,7 +111,7 @@ class MergeSystem:
         angle2 = self._angle(l2)
 
         # --- robust angle check ---
-        if self._angle_diff(angle1, angle2) > 10:
+        if self._angle_diff(angle1, angle2) > 20:
             return False
 
         # --- classify orientation using angle ---

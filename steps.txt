@@ -20,3 +20,369 @@ Input
  → Sort by area
  → Remove inner cycles
  → Rooms
+ OPTION 2 (REAL SYSTEM — FUTURE)
+👉 REGION DETECTION (NOT CYCLES)
+
+Instead of:
+
+detect cycles
+
+You do:
+
+detect empty regions bounded by walls
+
+Techniques:
+
+flood fill on inverted walls
+planar graph face detection
+constrained region growing
+
+
+1. Normalizer              ✅
+2. WallDetector            ✅
+3. MergeSystem             ✅
+4. IntersectionSplitter    ✅
+5. TopologyRefiner         ✅
+6. RegionDetector          ⚠️ (CURRENT FOCUS)
+7. RegionRefiner           ❌ (NEXT)
+8. RoomGraph (optional)    ❌ (LATER)
+9. 3D Generator            🚫
+
+
+
+from typing import List, Tuple
+from collections import defaultdict
+import cv2
+
+Point = Tuple[int, int]
+Line = Tuple[Point, Point]
+
+
+class TopologyRefiner:
+
+    def __init__(self, intersection_detector, tol=8, max_dist=20, debug=True):
+        self.intersection = intersection_detector
+        self.tol = tol
+        self.max_dist = max_dist
+        self.debug = debug
+
+    # ===================== MAIN =====================
+
+    def refine(self, walls: List[Line], img=None) -> List[Line]:
+
+        current = self._snap_lines(self._deduplicate(walls))
+
+        # 🔥 FIX: compute scale AFTER current exists
+        pts = [p for l in current for p in l]
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        scale = max(max(xs)-min(xs), max(ys)-min(ys))
+
+        self.max_dist = int(0.03 * scale)
+        snap_tol = int(self.tol * 2)
+
+        for _ in range(5):
+
+            split_data = self.intersection.split(
+                [{"line": l, "votes": 1} for l in current]
+            )
+            split = [d["line"] for d in split_data]
+
+            split = self._snap_lines(split)
+
+            extended = self._extend_lines(split)
+
+            # 🔥 NEW: gap bridging
+            bridged = self._bridge_gaps(extended)
+
+            connected = self._snap_endpoints_global(bridged, snap_tol)
+
+            cleaned = self._deduplicate(connected)
+
+            if set(cleaned) == set(current):
+                break
+
+            current = cleaned
+
+        final = self._snap_lines(current)
+
+        if self.debug:
+            self._analyze_topology(final)
+
+        if self.debug and img is not None:
+            self._show(img, final)
+
+        return final
+
+    # ===================== 🔥 GAP BRIDGING =====================
+
+    def _bridge_gaps(self, lines):
+
+        new_lines = list(lines)
+        points = [p for l in lines for p in l]
+
+        for i in range(len(points)):
+            for j in range(i + 1, len(points)):
+
+                p = points[i]
+                q = points[j]
+
+                dx = abs(p[0] - q[0])
+                dy = abs(p[1] - q[1])
+
+                # horizontal alignment
+                if dy <= self.tol and dx <= self.max_dist:
+                    new_lines.append((p, q))
+
+                # vertical alignment
+                elif dx <= self.tol and dy <= self.max_dist:
+                    new_lines.append((p, q))
+
+        return new_lines
+
+    # ===================== EXTENSION =====================
+
+    def _extend_lines(self, lines: List[Line]):
+
+        deg = defaultdict(int)
+        for a, b in lines:
+            deg[a] += 1
+            deg[b] += 1
+
+        horiz = defaultdict(list)
+        vert = defaultdict(list)
+
+        for (x1, y1), (x2, y2) in lines:
+
+            if abs(y1 - y2) <= self.tol:
+                y = int((y1 + y2) / 2)
+                horiz[y].append((min(x1, x2), max(x1, x2)))
+
+            elif abs(x1 - x2) <= self.tol:
+                x = int((x1 + x2) / 2)
+                vert[x].append((min(y1, y2), max(y1, y2)))
+
+        new_lines = []
+
+        for (x1, y1), (x2, y2) in lines:
+
+            start = (x1, y1)
+            end = (x2, y2)
+
+            is_horizontal = abs(y1 - y2) <= self.tol
+
+            # 🔥 FIX: handle deg <= 2 (not just 1)
+            if deg[start] <= 2:
+                ext = self._find_extension(start, end, is_horizontal, horiz, vert)
+                if ext:
+                    start = ext
+
+            if deg[end] <= 2:
+                ext = self._find_extension(end, start, is_horizontal, horiz, vert)
+                if ext:
+                    end = ext
+
+            if start != end:
+                new_lines.append((start, end))
+
+        return new_lines
+
+    def _find_extension(self, endpoint, other_end, is_horizontal, horiz, vert):
+
+        x, y = endpoint
+        ox, oy = other_end
+
+        best = None
+        best_dist = 1e9
+
+        if is_horizontal:
+            dx = x - ox
+
+            for vx in vert:
+
+                if dx > 0 and vx <= x:
+                    continue
+                if dx < 0 and vx >= x:
+                    continue
+
+                dist = abs(vx - x)
+                if dist > self.max_dist:
+                    continue
+
+                for y1, y2 in vert[vx]:
+                    if y1 - self.tol <= y <= y2 + self.tol:
+                        if dist < best_dist:
+                            best = (vx, y)
+                            best_dist = dist
+
+        else:
+            dy = y - oy
+
+            for hy in horiz:
+
+                if dy > 0 and hy <= y:
+                    continue
+                if dy < 0 and hy >= y:
+                    continue
+
+                dist = abs(hy - y)
+                if dist > self.max_dist:
+                    continue
+
+                for x1, x2 in horiz[hy]:
+                    if x1 - self.tol <= x <= x2 + self.tol:
+                        if dist < best_dist:
+                            best = (x, hy)
+                            best_dist = dist
+
+        return best
+
+    # ===================== GLOBAL SNAP =====================
+
+    def _snap_endpoints_global(self, lines, snap_tol):
+
+        points = list({p for l in lines for p in l})
+        parent = {}
+
+        def find(p):
+            while parent[p] != p:
+                parent[p] = parent[parent[p]]
+                p = parent[p]
+            return p
+
+        def union(a, b):
+            pa, pb = find(a), find(b)
+            if pa != pb:
+                parent[pb] = pa
+
+        for p in points:
+            parent[p] = p
+
+        for i in range(len(points)):
+            for j in range(i + 1, len(points)):
+                p, q = points[i], points[j]
+                if abs(p[0] - q[0]) <= snap_tol and abs(p[1] - q[1]) <= snap_tol:
+                    union(p, q)
+
+        rep_map = {p: find(p) for p in points}
+
+        new_lines = []
+        for a, b in lines:
+            a = rep_map[a]
+            b = rep_map[b]
+            if a != b:
+                new_lines.append((a, b))
+
+        return new_lines
+
+    # ===================== UTIL =====================
+
+    def _snap_lines(self, lines):
+        snapped = []
+        for (x1, y1), (x2, y2) in lines:
+            if abs(y1 - y2) <= self.tol:
+                y = int((y1 + y2) / 2)
+                snapped.append(((x1, y), (x2, y)))
+            elif abs(x1 - x2) <= self.tol:
+                x = int((x1 + x2) / 2)
+                snapped.append(((x, y1), (x, y2)))
+            else:
+                snapped.append(((x1, y1), (x2, y2)))
+        return snapped
+
+    def _deduplicate(self, lines):
+        seen = set()
+        result = []
+        for a, b in lines:
+            if a == b:
+                continue
+            key = (a, b) if a <= b else (b, a)
+            if key not in seen:
+                seen.add(key)
+                result.append(key)
+        return result
+
+
+
+        import numpy as np
+import cv2
+from typing import List, Tuple
+
+Point = Tuple[int, int]
+Line = Tuple[Point, Point]
+
+
+class RegionDetector:
+
+    def __init__(self, thickness=3, debug=True):
+        self.thickness = thickness
+        self.debug = debug
+
+    # ===================== MAIN =====================
+
+    def detect(self, walls: List[Line], image_shape):
+
+        H, W = image_shape[:2]
+
+        # ------------------ 1. WALL MASK ------------------
+        wall_mask = np.zeros((H, W), dtype=np.uint8)
+
+        for (x1, y1), (x2, y2) in walls:
+            cv2.line(wall_mask, (x1, y1), (x2, y2), 255, 6)  # 🔥 thicker walls
+
+        # ------------------ 2. STRONG GAP CLOSING ------------------
+        kernel = np.ones((5, 5), np.uint8)
+
+        wall_mask = cv2.dilate(wall_mask, kernel, iterations=3)
+        wall_mask = cv2.morphologyEx(wall_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+        # 🔥 balance (prevent overgrowth)
+        wall_mask = cv2.erode(wall_mask, kernel, iterations=1)
+
+        # ------------------ 3. FREE SPACE ------------------
+        free_space = cv2.bitwise_not(wall_mask)
+
+        # ------------------ 4. CONNECTED COMPONENTS ------------------
+        num_labels, labels = cv2.connectedComponents(free_space)
+
+        # ------------------ 5. AREA COMPUTE ------------------
+        areas = [np.sum(labels == i) for i in range(num_labels)]
+
+        outside = np.argmax(areas)
+
+        rooms = []
+
+        for i in range(num_labels):
+
+            if i == outside:
+                continue
+
+            # 🔥 better threshold (scale-aware)
+            if areas[i] < 3000:
+                continue
+
+            mask = (labels == i).astype(np.uint8) * 255
+
+            contours, _ = cv2.findContours(
+                mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )
+
+            if contours:
+                rooms.append(contours[0])
+
+        if self.debug:
+            self._visualize(wall_mask, free_space, rooms)
+
+        return rooms
+    # ===================== DEBUG =====================
+
+    def _visualize(self, wall_mask, rooms):
+
+        vis = cv2.cvtColor(wall_mask, cv2.COLOR_GRAY2BGR)
+
+        for cnt in rooms:
+            cv2.drawContours(vis, [cnt], -1, (0, 255, 0), 2)
+
+        cv2.imshow("Region Rooms", vis)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()

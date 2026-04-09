@@ -6,7 +6,7 @@ Line = Tuple[Tuple[int, int], Tuple[int, int]]
 
 class IntersectionSplitter:
 
-    def __init__(self, tol_ratio=0.01, min_seg_ratio=0.01, debug=True):
+    def __init__(self, tol_ratio=0.002, min_seg_ratio=0.02, debug=True):
         self.tol_ratio = tol_ratio
         self.min_seg_ratio = min_seg_ratio
         self.debug = debug
