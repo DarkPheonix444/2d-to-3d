@@ -1,3 +1,97 @@
+1. Preprocessing Stabilization
+     - Action: slightly tighten Normalizer.
+     - Goal: reduce noise before structural stages.
+     - Constraint: do NOT over-aggressively remove walls.
+
+2. Segment Connector (Wall Formation) [Done]
+     - Action: build a Segment Joiner.
+     - Merge: small collinear segments into full walls.
+     - Output: clean, continuous wall lines.
+     - Store: wall lengths.
+     - Maintain structure:
+
+         wall = {
+                 "coords": ((x1, y1), (x2, y2)),
+                 "length": float
+         }
+
+3. Intersection Engine [Done]
+     - Detect and split at:
+         - Cross junctions (+)
+         - T junctions (perpendicular)
+     - Ensure:
+         - No overlapping unbroken walls.
+         - All walls are properly segmented at intersections.
+topology refiner being added 
+4. Deduplication Layer
+     - Identify duplicate or near-parallel overlapping walls.
+     - Merge duplicates:
+         - Center-align them.
+         - Preserve connectivity.
+     - Reconnect neighboring walls after merge.
+
+5. Basic Cleaner (Critical - missing piece)
+     - Remove:
+         - Dangling segments (1-end connected)
+         - Isolated segments (0 connections)
+         - External noise (outside main structure)
+     - Constraint: NEVER remove valid structural walls.
+
+6. Structural Connectivity Fix
+     - Ensure:
+         - Walls connect properly.
+         - No gaps between endpoints.
+     - Fix:
+         - Near-miss endpoints -> snap together.
+         - Small breaks -> bridge them.
+
+7. Room Closure Enforcement
+     - Ensure all rooms form closed cycles.
+     - Fix open loops:
+         - Detect gaps.
+         - Close intelligently (NOT guessing blindly).
+
+8. Door Handling (After structure stabilizes)
+     - Detect doors via:
+         - Length patterns
+         - Geometry (angled/slanted lines)
+     - Close door gaps to complete rooms.
+
+9. Advanced Edge Cleaner
+     - Remove:
+         - Edges not contributing to any room
+         - Floating/internal noise structures
+     - Condition: must not break valid room cycles.
+
+10. Region Detection
+        - Detect closed regions (rooms).
+        - Use graph cycles, not heuristics.
+
+11. Region Refinement
+        - Remove:
+            - Tiny fake rooms
+            - Noise-induced regions
+        - Use:
+            - Wall length
+            - Geometry consistency
+
+12. Data Integrity Upgrade (IMPORTANT FIX)
+        - Store for every wall:
+            - Coordinates
+            - Length
+            - Connectivity
+        - Use this for:
+            - Thresholding
+            - Cleaning
+            - Region validation
+
+13. Validation Rule (Non-Negotiable)
+        - Rooms must be:
+            - Fully closed
+            - Structurally valid
+            - No guessing or bluff detection
+
+
 
 Input
  → Normalization

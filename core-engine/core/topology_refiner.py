@@ -1,5 +1,6 @@
 from typing import List, Tuple
 from collections import defaultdict
+import numpy as np
 import cv2
 
 Point = Tuple[int, int]
@@ -8,10 +9,9 @@ Line = Tuple[Point, Point]
 
 class TopologyRefiner:
 
-    def __init__(self, intersection_detector, tol=8, max_dist=20, debug=True):
+    def __init__(self, intersection_detector, tol=8, debug=True):
         self.intersection = intersection_detector
         self.tol = tol
-        self.max_dist = max_dist
         self.debug = debug
 
     # ===================== MAIN =====================
@@ -20,15 +20,11 @@ class TopologyRefiner:
 
         current = self._snap_lines(self._deduplicate(walls))
 
-        pts = [p for l in current for p in l]
-        xs = [p[0] for p in pts]
-        ys = [p[1] for p in pts]
-        scale = max(max(xs)-min(xs), max(ys)-min(ys))
-
-        self.max_dist = int(0.03 * scale)
-        snap_tol = int(self.tol * 2)
+        snap_tol = int(self.tol * 1.2)
 
         for _ in range(5):
+
+            self.current_lines = current
 
             # --- intersection split ---
             split_data = self.intersection.split(
@@ -38,10 +34,17 @@ class TopologyRefiner:
 
             split = self._snap_lines(split)
 
-            # --- controlled extension ---
-            extended = self._extend_lines(split)
+            # --- compute avg length (adaptive scaling) ---
+            lengths = [
+                ((x2-x1)**2 + (y2-y1)**2)**0.5
+                for (x1,y1),(x2,y2) in split
+            ]
+            avg_len = np.mean(lengths) if lengths else 1
 
-            # --- SAFE GAP CONNECTION (NEW CORE FIX) ---
+            # --- controlled extension ---
+            extended = self._extend_lines(split, avg_len)
+
+            # --- safe gap connection ---
             connected = self._safe_connect(extended)
 
             # --- global snapping ---
@@ -56,12 +59,6 @@ class TopologyRefiner:
 
         final = self._snap_lines(current)
 
-        if self.debug:
-            self._analyze_topology(final)
-
-        if self.debug and img is not None:
-            self._show(img, final)
-
         return final
 
     # ===================== SAFE GAP CONNECT =====================
@@ -71,11 +68,12 @@ class TopologyRefiner:
 
         for i in range(len(lines)):
             (x1, y1), (x2, y2) = lines[i]
+            len1 = ((x2-x1)**2 + (y2-y1)**2)**0.5
 
             for j in range(i + 1, len(lines)):
                 (x3, y3), (x4, y4) = lines[j]
+                len2 = ((x4-x3)**2 + (y4-y3)**2)**0.5
 
-                # orientation
                 is_h1 = abs(y1 - y2) <= self.tol
                 is_h2 = abs(y3 - y4) <= self.tol
 
@@ -84,57 +82,61 @@ class TopologyRefiner:
 
                 # ---------- HORIZONTAL ----------
                 if is_h1 and is_h2:
+
                     if abs(y1 - y3) > self.tol:
                         continue
 
                     seg1 = sorted([x1, x2])
                     seg2 = sorted([x3, x4])
 
-                    gap = max(seg1[0], seg2[0]) - min(seg1[1], seg2[1])
+                    # 🔥 correct gap direction
+                    if seg1[1] <= seg2[0]:
+                        gap = seg2[0] - seg1[1]
+                        p, q = (seg1[1], y1), (seg2[0], y1)
+                    elif seg2[1] <= seg1[0]:
+                        gap = seg1[0] - seg2[1]
+                        p, q = (seg2[1], y1), (seg1[0], y1)
+                    else:
+                        continue
 
-                    if 0 < gap <= self.max_dist:
-                        p = (seg1[1], y1)
-                        q = (seg2[0], y1)
+                    local_thresh = min(len1, len2) * 0.2
+
+                    if 0 < gap <= local_thresh:
                         new_lines.append((p, q))
 
                 # ---------- VERTICAL ----------
                 elif is_v1 and is_v2:
+
                     if abs(x1 - x3) > self.tol:
                         continue
 
                     seg1 = sorted([y1, y2])
                     seg2 = sorted([y3, y4])
 
-                    gap = max(seg1[0], seg2[0]) - min(seg1[1], seg2[1])
+                    if seg1[1] <= seg2[0]:
+                        gap = seg2[0] - seg1[1]
+                        p, q = (x1, seg1[1]), (x1, seg2[0])
+                    elif seg2[1] <= seg1[0]:
+                        gap = seg1[0] - seg2[1]
+                        p, q = (x1, seg2[1]), (x1, seg1[0])
+                    else:
+                        continue
 
-                    if 0 < gap <= self.max_dist:
-                        p = (x1, seg1[1])
-                        q = (x1, seg2[0])
+                    local_thresh = min(len1, len2) * 0.2
+
+                    if 0 < gap <= local_thresh:
                         new_lines.append((p, q))
 
         return new_lines
 
-    # ===================== EXTENSION (RESTRICTED) =====================
+    # ===================== EXTENSION =====================
 
-    def _extend_lines(self, lines: List[Line]):
+    def _extend_lines(self, lines: List[Line], avg_len):
 
         deg = defaultdict(int)
         for a, b in lines:
             deg[a] += 1
             deg[b] += 1
-
-        horiz = defaultdict(list)
-        vert = defaultdict(list)
-
-        for (x1, y1), (x2, y2) in lines:
-
-            if abs(y1 - y2) <= self.tol:
-                y = int((y1 + y2) / 2)
-                horiz[y].append((min(x1, x2), max(x1, x2)))
-
-            elif abs(x1 - x2) <= self.tol:
-                x = int((x1 + x2) / 2)
-                vert[x].append((min(y1, y2), max(y1, y2)))
 
         new_lines = []
 
@@ -143,16 +145,22 @@ class TopologyRefiner:
             start = (x1, y1)
             end = (x2, y2)
 
+            length = ((x2-x1)**2 + (y2-y1)**2)**0.5
+
             is_horizontal = abs(y1 - y2) <= self.tol
 
-            # 🔥 ONLY extend true endpoints
+            # 🔥 adaptive filtering
+            if length < 0.1 * avg_len:
+                new_lines.append((start, end))
+                continue
+
             if deg[start] == 1:
-                ext = self._find_extension(start, end, is_horizontal, horiz, vert)
+                ext = self._find_extension(start, end, is_horizontal)
                 if ext:
                     start = ext
 
             if deg[end] == 1:
-                ext = self._find_extension(end, start, is_horizontal, horiz, vert)
+                ext = self._find_extension(end, start, is_horizontal)
                 if ext:
                     end = ext
 
@@ -163,53 +171,40 @@ class TopologyRefiner:
 
     # ===================== EXTENSION HELPER =====================
 
-    def _find_extension(self, endpoint, other_end, is_horizontal, horiz, vert):
+    def _find_extension(self, endpoint, other_end, is_horizontal):
 
         x, y = endpoint
-        ox, oy = other_end
 
         best = None
         best_dist = 1e9
 
-        if is_horizontal:
-            dx = x - ox
+        for (x1, y1), (x2, y2) in self.current_lines:
 
-            for vx in vert:
-
-                if dx > 0 and vx <= x:
-                    continue
-                if dx < 0 and vx >= x:
+            if is_horizontal:
+                if abs(y1 - y2) > self.tol:
                     continue
 
-                dist = abs(vx - x)
-                if dist > self.max_dist:
+                if not (min(x1, x2) <= x <= max(x1, x2)):
                     continue
 
-                for y1, y2 in vert[vx]:
-                    if y1 - self.tol <= y <= y2 + self.tol:
-                        if dist < best_dist:
-                            best = (vx, y)
-                            best_dist = dist
+                dist = abs(y1 - y)
 
-        else:
-            dy = y - oy
+                if dist < best_dist and dist <= self.tol * 1.5:
+                    best = (x, y1)
+                    best_dist = dist
 
-            for hy in horiz:
-
-                if dy > 0 and hy <= y:
-                    continue
-                if dy < 0 and hy >= y:
+            else:
+                if abs(x1 - x2) > self.tol:
                     continue
 
-                dist = abs(hy - y)
-                if dist > self.max_dist:
+                if not (min(y1, y2) <= y <= max(y1, y2)):
                     continue
 
-                for x1, x2 in horiz[hy]:
-                    if x1 - self.tol <= x <= x2 + self.tol:
-                        if dist < best_dist:
-                            best = (x, hy)
-                            best_dist = dist
+                dist = abs(x1 - x)
+
+                if dist < best_dist and dist <= self.tol * 1.5:
+                    best = (x1, y)
+                    best_dist = dist
 
         return best
 

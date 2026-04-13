@@ -1,162 +1,202 @@
-from typing import List, Tuple, Dict
-import numpy as np
+from typing import List, Tuple, Optional, Set
+import cv2
 
-Line = Tuple[Tuple[int, int], Tuple[int, int]]
+Point = Tuple[int, int]
+Line = Tuple[Point, Point]
 
 
 class IntersectionSplitter:
 
-    def __init__(self, tol_ratio=0.002, min_seg_ratio=0.02, debug=True):
-        self.tol_ratio = tol_ratio
-        self.min_seg_ratio = min_seg_ratio
+    def __init__(self, tolerance: int = 8, debug: bool = True):
+        self.tolerance = tolerance
         self.debug = debug
-
-        self.tol = None
-        self.min_seg = None
 
     # ===================== MAIN =====================
 
-    def split(self, lines_with_votes: List[Dict]) -> List[Dict]:
+    def process(self, floors: List[List[Line]], images=None) -> List[List[Line]]:
+        results = []
 
-        if not lines_with_votes:
-            return []
+        for i, walls in enumerate(floors):
 
-        # ---- SCALE COMPUTATION ----
-        pts = [p for d in lines_with_votes for p in d["line"]]
-        xs = [p[0] for p in pts]
-        ys = [p[1] for p in pts]
+            intersections = self._find_intersections(walls)
+            print(f"[DEBUG] intersections found ({i}): {len(intersections)}")
 
-        scale = np.hypot(max(xs) - min(xs), max(ys) - min(ys))
+            split_walls = self._split_walls(walls, intersections)
 
-        self.tol = self.tol_ratio * scale
-        self.min_seg = self.min_seg_ratio * scale
+            if self.debug and images is not None:
+                self._show(images[i], split_walls, f"intersection_{i}")
 
-        if self.debug:
-            print(f"[Intersection] tol={self.tol:.2f}, min_seg={self.min_seg:.2f}")
+            results.append(split_walls)
 
-        # ---- FIND INTERSECTIONS ----
-        intersections = self._find_intersections(lines_with_votes)
+        return results
 
-        # ---- SPLIT LINES ----
-        new_lines = []
+    # ===================== INTERSECTION =====================
 
-        for d in lines_with_votes:
-            line = d["line"]
-            votes = d["votes"]
+    def _find_intersections(self, walls: List[Line]) -> List[Point]:
 
-            split_pts = []
+        points: Set[Point] = set()
 
-            for p in intersections:
-                if self._on_segment(line, p):
-                    if not self._near_endpoint(line, p):
-                        split_pts.append(p)
+        # ---- CROSS INTERSECTIONS (ONLY H × V) ----
+        for i in range(len(walls)):
+            for j in range(i + 1, len(walls)):
+                p = self._intersect(walls[i], walls[j])
+                if p:
+                    points.add(p)
 
-            if not split_pts:
-                new_lines.append(d)
-                continue
+        # ---- T-JUNCTIONS (STRICT) ----
+        for i, wall in enumerate(walls):
+            for endpoint in wall:
+                for j, other in enumerate(walls):
+                    if i == j:
+                        continue
 
-            pts = [line[0]] + sorted(split_pts, key=lambda p: self._dist(line[0], p)) + [line[1]]
+                    if not self._are_orthogonal(wall, other):
+                        continue
+
+                    if self._point_on_line(endpoint, other):
+
+                        # 🔴 ignore fake endpoint overlaps
+                        if self._is_near_endpoint(endpoint, other):
+                            continue
+
+                        points.add(endpoint)
+
+        return list(points)
+
+    def _intersect(self, a: Line, b: Line) -> Optional[Point]:
+
+        if self._is_horizontal(a) and self._is_vertical(b):
+            h, v = a, b
+        elif self._is_vertical(a) and self._is_horizontal(b):
+            h, v = b, a
+        else:
+            return None
+
+        (hx1, hy1), (hx2, hy2) = h
+        (vx1, vy1), (vx2, vy2) = v
+
+        x = int(round((vx1 + vx2) / 2))
+        y = int(round((hy1 + hy2) / 2))
+
+        if not (min(hx1, hx2) - self.tolerance <= x <= max(hx1, hx2) + self.tolerance):
+            return None
+
+        if not (min(vy1, vy2) - self.tolerance <= y <= max(vy1, vy2) + self.tolerance):
+            return None
+
+        return (x, y)
+
+    # ===================== SPLITTING =====================
+
+    def _split_walls(self, walls: List[Line], points: List[Point]) -> List[Line]:
+
+        new_walls: List[Line] = []
+
+        for wall in walls:
+
+            pts: Set[Point] = set()
+            pts.add(wall[0])
+            pts.add(wall[1])
+
+            for p in points:
+
+                if not self._point_on_line(p, wall):
+                    continue
+
+                # 🔴 CRITICAL: skip endpoint intersections
+                if self._is_near_endpoint(p, wall):
+                    continue
+
+                px, py = p
+
+                # snap to axis
+                if self._is_horizontal(wall):
+                    py = int((wall[0][1] + wall[1][1]) / 2)
+                else:
+                    px = int((wall[0][0] + wall[1][0]) / 2)
+
+                pts.add((px, py))
+
+            pts = list(pts)
+
+            if self._is_horizontal(wall):
+                pts.sort(key=lambda p: p[0])
+            else:
+                pts.sort(key=lambda p: p[1])
 
             for i in range(len(pts) - 1):
                 p1, p2 = pts[i], pts[i + 1]
 
-                if self._dist(p1, p2) < self.min_seg:
+                if p1 == p2:
                     continue
 
-                new_lines.append({
-                    "line": (p1, p2),
-                    "votes": votes
-                })
-
-        # ---- REMOVE DUPLICATES ----
-        final = self._deduplicate(new_lines)
-
-        if self.debug:
-            print(f"[Intersection] Before: {len(lines_with_votes)}, After: {len(final)}")
-
-        return final
-
-    # ===================== INTERSECTION =====================
-
-    def _find_intersections(self, lines):
-
-        points = []
-
-        for i in range(len(lines)):
-            l1 = lines[i]["line"]
-
-            for j in range(i + 1, len(lines)):
-                l2 = lines[j]["line"]
-
-                p = self._intersection_point(l1, l2)
-
-                if p is None:
+                # 🔴 adaptive safe threshold
+                if self._length(p1, p2) < 10:
                     continue
 
-                if self._on_segment(l1, p) and self._on_segment(l2, p):
-                    points.append(p)
+                new_walls.append((p1, p2))
 
-        return points
-
-    def _intersection_point(self, l1, l2):
-        (x1, y1), (x2, y2) = l1
-        (x3, y3), (x4, y4) = l2
-
-        denom = (x1-x2)*(y3-y4) - (y1-y2)*(x3-x4)
-
-        if abs(denom) < 1e-6:
-            return None
-
-        px = ((x1*y2 - y1*x2)*(x3-x4) - (x1-x2)*(x3*y4 - y3*x4)) / denom
-        py = ((x1*y2 - y1*x2)*(y3-y4) - (y1-y2)*(x3*y4 - y3*x4)) / denom
-
-        return (int(px), int(py))
+        return self._deduplicate(new_walls)
 
     # ===================== HELPERS =====================
 
-    def _on_segment(self, l, p):
+    def _is_near_endpoint(self, p: Point, wall: Line):
+        (x1, y1), (x2, y2) = wall
+        return (
+            abs(p[0] - x1) <= self.tolerance and abs(p[1] - y1) <= self.tolerance
+        ) or (
+            abs(p[0] - x2) <= self.tolerance and abs(p[1] - y2) <= self.tolerance
+        )
+
+    def _is_horizontal(self, l: Line):
+        return abs(l[0][1] - l[1][1]) <= self.tolerance
+
+    def _is_vertical(self, l: Line):
+        return abs(l[0][0] - l[1][0]) <= self.tolerance
+
+    def _are_orthogonal(self, a: Line, b: Line):
+        return (self._is_horizontal(a) and self._is_vertical(b)) or \
+               (self._is_vertical(a) and self._is_horizontal(b))
+
+    def _point_on_line(self, p: Point, l: Line):
         (x1, y1), (x2, y2) = l
         px, py = p
 
-        return (
-            min(x1, x2) - self.tol <= px <= max(x1, x2) + self.tol and
-            min(y1, y2) - self.tol <= py <= max(y1, y2) + self.tol
-        )
+        if not (min(x1, x2) - self.tolerance <= px <= max(x1, x2) + self.tolerance and
+                min(y1, y2) - self.tolerance <= py <= max(y1, y2) + self.tolerance):
+            return False
 
-    def _near_endpoint(self, l, p):
-        return (
-            self._dist(l[0], p) < self.tol or
-            self._dist(l[1], p) < self.tol
-        )
+        if self._is_horizontal(l):
+            return abs(py - (y1 + y2) // 2) <= self.tolerance
 
-    def _dist(self, a, b):
-        return np.hypot(a[0] - b[0], a[1] - b[1])
+        elif self._is_vertical(l):
+            return abs(px - (x1 + x2) // 2) <= self.tolerance
 
-    # ===================== DEDUP =====================
+        return False
 
-    def _deduplicate(self, lines):
+    def _length(self, a: Point, b: Point):
+        return ((a[0] - b[0])**2 + (a[1] - b[1])**2) ** 0.5
 
-        unique = []
+    def _deduplicate(self, walls: List[Line]) -> List[Line]:
+        seen = set()
+        res = []
 
-        for d in lines:
-            l = d["line"]
+        for a, b in walls:
+            key = tuple(sorted([a, b]))
+            if key not in seen:
+                seen.add(key)
+                res.append((a, b))
 
-            exists = False
-            for u in unique:
-                if self._same_line(l, u["line"]):
-                    exists = True
-                    break
+        return res
 
-            if not exists:
-                unique.append(d)
+    # ===================== VISUAL =====================
 
-        return unique
+    def _show(self, img, lines, title="intersection"):
+        vis = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
-    def _same_line(self, l1, l2):
-        return (
-            self._dist(l1[0], l2[0]) < self.tol and
-            self._dist(l1[1], l2[1]) < self.tol
-        ) or (
-            self._dist(l1[0], l2[1]) < self.tol and
-            self._dist(l1[1], l2[0]) < self.tol
-        )
+        for (x1, y1), (x2, y2) in lines:
+            cv2.line(vis, (x1, y1), (x2, y2), (255, 0, 0), 2)
+
+        cv2.imshow(title, vis)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
