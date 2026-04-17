@@ -10,6 +10,8 @@ from core.wall_detector import WallDetector
 from core.merger import MergeSystem
 from core.segment_connector import SegmentConnector
 from core.intersection_split import IntersectionSplitter
+from core.cleaner import LightCleaner
+from core.dedup import Deduplicator
 from core.region_detection import RegionDetector
 from core.region_refiner import RegionRefiner
 from core.topology_refiner import TopologyRefiner
@@ -230,13 +232,28 @@ def testing(image_path="core-engine/images/test7.jpg", visualize=True):
     if visualize:
         show_image("SPLIT - After SegmentConnector", overlay_lines(img, split_line_list, (0, 150, 255), 2))
 
-    print("[6] Topology refine...")
+    print("[6] Cleaner...")
+    cleaner = LightCleaner(tol=cfg["topo_tol"], debug=False)
+    cleaned_lines = cleaner.clean(split_line_list, base_img=normalized[0]["stabilized"])
+    print(f"[LightCleaner] lines={len(cleaned_lines)}")
+    if visualize:
+        show_image("CLEANED - Before Topology", overlay_lines(img, cleaned_lines, (0, 255, 255), 2))
+
+    print("[7] Deduplicate...")
+    deduplicator = Deduplicator(tol=cfg["topo_tol"], debug=False)
+    deduped_data = deduplicator.process(cleaned_lines, base_img=normalized[0]["stabilized"])
+    deduped_lines = [item["line"] for item in deduped_data]
+    print(f"[Deduplicator] lines={len(deduped_lines)}")
+    if visualize:
+        show_image("DEDUPED - Before Topology", overlay_lines(img, deduped_lines, (255, 0, 255), 2))
+
+    print("[8] Topology refine...")
     topo_refiner = TopologyRefiner(
         split_adapter,
         tol=cfg["topo_tol"],
         debug=False,
     )
-    topology_output = topo_refiner.refine(split_line_list, normalized[0]["stabilized"])
+    topology_output = topo_refiner.refine(deduped_lines, normalized[0]["stabilized"])
     refined_topology_lines, topology_stats = parse_topology_output(topology_output)
     print(f"[TopologyRefiner] lines={len(refined_topology_lines)}")
     if topology_stats:
@@ -244,10 +261,10 @@ def testing(image_path="core-engine/images/test7.jpg", visualize=True):
     if visualize:
         show_image("TOPOLOGY REFINED - Before Final Layout", overlay_lines(img, refined_topology_lines, (255, 255, 0), 2))
 
-    print("[7] Region detection...")
-    region_walls = refined_topology_lines or split_line_list
+    print("[9] Region detection...")
+    region_walls = refined_topology_lines or deduped_lines
     if not refined_topology_lines:
-        print("[RegionDetector] TopologyRefiner returned no lines; falling back to split lines.")
+        print("[RegionDetector] TopologyRefiner returned no lines; falling back to deduplicated output.")
 
     image_shape = img.shape
     region_detector = RegionDetector(thickness=cfg["region_thickness"], debug=False)
@@ -259,7 +276,7 @@ def testing(image_path="core-engine/images/test7.jpg", visualize=True):
         region_viz = overlay_region_rooms(img, region_walls, region_rooms)
         show_image("REGION DETECTION OUTPUT - Orange walls / Green rooms", region_viz)
 
-    print("[8] Region refine...")
+    print("[10] Region refine...")
     region_refiner = RegionRefiner(min_area=3000, debug=False)
     refined_rooms = region_refiner.refine(region_rooms, region_walls, image_shape)
 
@@ -272,7 +289,8 @@ def testing(image_path="core-engine/images/test7.jpg", visualize=True):
     print("\n========== DONE ==========\n")
     return {
         "connected_lines": [d["line"] for d in connected],
-        "cleaned_lines": [],
+        "cleaned_lines": cleaned_lines,
+        "deduped_lines": deduped_lines,
         "topology_lines": refined_topology_lines,
         "topology_stats": topology_stats,
         "region_walls": region_walls,
