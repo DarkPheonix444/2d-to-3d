@@ -28,7 +28,7 @@ class TopologyRefiner:
 
             # --- intersection split ---
             split_data = self.intersection.split(
-                [{"line": l, "votes": 1} for l in current]
+                [{"line": line, "votes": 1} for line in current]
             )
             split = [d["line"] for d in split_data]
 
@@ -58,6 +58,14 @@ class TopologyRefiner:
             current = cleaned
 
         final = self._snap_lines(current)
+        if self.debug:
+            print("\n========== FINAL OUTPUT ==========")
+            print(f"Total lines: {len(final)}")
+
+            for i, line in enumerate(final[:20]):  # limit to 20
+                print(f"{i}: {line}")
+
+            self._visualize(img, final, title="Topology Refiner")
 
         return final
 
@@ -212,7 +220,7 @@ class TopologyRefiner:
 
     def _snap_endpoints_global(self, lines, snap_tol):
 
-        points = list({p for l in lines for p in l})
+        points = list({p for line in lines for p in line})
         parent = {}
 
         def find(p):
@@ -272,3 +280,27 @@ class TopologyRefiner:
                 seen.add(key)
                 result.append(key)
         return result
+    
+    def _visualize(self, img, lines, title="final"):
+        if img is None:
+            return
+
+        vis = img.copy()
+        if len(vis.shape) == 2:
+            vis = cv2.cvtColor(vis, cv2.COLOR_GRAY2BGR)
+
+        for (x1, y1), (x2, y2) in lines:
+            cv2.line(vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+        vis = self._resize_for_display(vis)
+
+        cv2.imshow(title, vis)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+
+    def _resize_for_display(self, img, max_width=900, max_height=700):
+        h, w = img.shape[:2]
+        scale = min(max_width / w, max_height / h, 1.0)
+        if scale < 1.0:
+            return cv2.resize(img, (int(w * scale), int(h * scale)))
+        return img

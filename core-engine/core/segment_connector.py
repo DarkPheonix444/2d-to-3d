@@ -31,6 +31,7 @@ class SegmentConnector:
             vertical = []
             passthrough = []
 
+
             for d in merged_data:
                 (x1, y1), (x2, y2) = d["line"]
                 votes = int(d.get("votes", 1))
@@ -63,7 +64,7 @@ class SegmentConnector:
                 v_groups[key].append((x, y1, y2, votes))
 
             result = []
-
+            gaps=[]
             # ---- merge horizontal ----
             for group in h_groups.values():
                 if not group:
@@ -75,7 +76,7 @@ class SegmentConnector:
 
                 for y, s, e, votes in group[1:]:
                     gap = s - cur_end
-
+                    gaps.append(gap)
                     if gap <= self.gap_tol and s <= cur_end + self.gap_tol:
                         cur_end = max(cur_end, e)
                         vote_bucket.append(votes)
@@ -97,7 +98,7 @@ class SegmentConnector:
 
                 for x, s, e, votes in group[1:]:
                     gap = s - cur_end
-
+                    gaps.append(gap)
                     if gap <= self.gap_tol and s <= cur_end + self.gap_tol:
                         cur_end = max(cur_end, e)
                         vote_bucket.append(votes)
@@ -109,6 +110,17 @@ class SegmentConnector:
                 result.append(self._build_wall((cur_x, cur_start), (cur_x, cur_end), "V", votes=max(vote_bucket)))
 
             result.extend(passthrough)
+            before_lengths = [
+            np.hypot(d["line"][1][0]-d["line"][0][0],
+                        d["line"][1][1]-d["line"][0][1])
+                for d in merged_data
+            ]
+
+            after_lengths = [r["length"] for r in result]
+
+            print("\n========== LENGTH CHANGE ==========")
+            print(f"before_avg={np.mean(before_lengths):.2f}")
+            print(f"after_avg={np.mean(after_lengths):.2f}")
 
             # ---- stats ----
             if self.debug and result:
@@ -117,6 +129,36 @@ class SegmentConnector:
                 print(f"[SegmentConnector] avg={np.mean(lengths):.2f}, median={np.median(lengths):.2f}")
                 if passthrough:
                     print(f"[SegmentConnector] passthrough_non_orthogonal={len(passthrough)}")
+
+            print("\n========== GAP STATS ==========")
+
+            if gaps:
+                print(f"min={min(gaps)}, max={max(gaps)}, avg={np.mean(gaps):.2f}")
+
+                small = sum(1 for g in gaps if g < 5)
+                medium = sum(1 for g in gaps if 5 <= g < 20)
+                large = sum(1 for g in gaps if g >= 20)
+
+                print(f"small(<5)={small}")
+                print(f"medium(5-20)={medium}")
+                print(f"large(>20)={large}")
+
+            
+
+            deg = defaultdict(int)
+
+            for r in result:
+                a, b = r["line"]
+                deg[a] += 1
+                deg[b] += 1
+
+            vals = list(deg.values())
+
+            print("\n========== DEGREE STATS ==========")
+            print(f"deg1={vals.count(1)}")
+            print(f"deg2={vals.count(2)}")
+            print(f"deg3={vals.count(3)}")
+            print(f"deg4+={sum(1 for v in vals if v>=4)}")
 
             return result
 
