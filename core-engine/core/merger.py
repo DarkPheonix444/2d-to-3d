@@ -63,12 +63,13 @@ class MergeSystem:
         merged_data = []
 
         for cluster in clusters:
-            rep = self._representative(cluster)
+            segments = self._build_segments_from_cluster(cluster)
 
-            merged_data.append({
-                "line": rep,
-                "votes": len(cluster)
-            })
+            for seg in segments:
+                merged_data.append({
+                    "line": seg,
+                    "votes": len(cluster)
+                })
 
         if self.debug:
             print(f"[Merge] input_lines={len(all_lines)}")
@@ -229,6 +230,49 @@ class MergeSystem:
             f"min={min(sizes)}, max={max(sizes)}, avg={np.mean(sizes):.2f}, median={np.median(sizes):.2f}"
         )
         print(f"[Merge] largest_clusters={sorted(sizes, reverse=True)[:8]}")
+    
+
+    def _build_segments_from_cluster(self, cluster: List[Line]) -> List[Line]:
+        orientation = self._cluster_orientation(cluster)
+
+        intervals = []
+        axis_vals = []
+
+        for (x1, y1), (x2, y2) in cluster:
+            if orientation == "H":
+                intervals.append((min(x1, x2), max(x1, x2)))
+                axis_vals.append((y1 + y2) / 2.0)
+            else:
+                intervals.append((min(y1, y2), max(y1, y2)))
+                axis_vals.append((x1 + x2) / 2.0)
+
+        # sort intervals
+        intervals.sort(key=lambda x: x[0])
+
+        merged = []
+        cur_start, cur_end = intervals[0]
+
+        for start, end in intervals[1:]:
+            if start <= cur_end + self.overlap_tol:
+                cur_end = max(cur_end, end)
+            else:
+                merged.append((cur_start, cur_end))
+                cur_start, cur_end = start, end
+
+        merged.append((cur_start, cur_end))
+
+        # build lines
+        axis = int(round(np.median(axis_vals)))
+        lines = []
+
+        for start, end in merged:
+            if orientation == "H":
+                lines.append(((int(start), axis), (int(end), axis)))
+            else:
+                lines.append(((axis, int(start)), (axis, int(end))))
+
+        return lines
+
 
     def _analyze_clusters(self, clusters: List[List[Line]]):
         diagnostics = []
