@@ -368,6 +368,39 @@ def testing(image_path="core-engine/images/floor.jpg", visualize=True):
     )
     print(f"[PointNormalizer] lines={len(normalized_lines)}")
     print(f"[PointNormalizer] before_after={len(merged)}->{len(normalized_lines)}")
+    # collect horizontal lines
+    lines = [d["line"] for d in normalized_lines if abs(d["line"][0][1] - d["line"][1][1]) < 5]
+
+    # normalize to (y, x_start, x_end)
+    norm = []
+    for (x1, y1), (x2, y2) in lines:
+        y = int((y1 + y2) / 2)
+        x1, x2 = sorted([x1, x2])
+        norm.append((y, x1, x2))
+
+    # group by y (same wall line)
+    from collections import defaultdict
+    groups = defaultdict(list)
+
+    for y, x1, x2 in norm:
+        key = round(y / 5)   # coarse grouping
+        groups[key].append((y, x1, x2))
+
+    # analyze each group
+    for gid, group in groups.items():
+        group.sort(key=lambda x: x[1])
+
+        print(f"\n===== WALL GROUP {gid} =====")
+
+        for i in range(len(group)):
+            print(group[i])
+
+            if i > 0:
+                prev = group[i-1]
+                curr = group[i]
+
+                gap = curr[1] - prev[2]
+                print(f"   gap_from_prev = {gap}")
 
     if visualize:
         show_image(
