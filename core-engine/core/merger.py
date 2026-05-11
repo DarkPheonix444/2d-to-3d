@@ -2,6 +2,7 @@ from typing import List, Tuple, Dict
 import numpy as np
 import cv2
 from collections import Counter
+from collections import defaultdict
 
 Line = Tuple[Tuple[int, int], Tuple[int, int]]
 
@@ -43,42 +44,228 @@ class MergeSystem:
         # ---- FLATTEN ----
         all_lines = [l for s in line_sets for l in s]
 
-        clusters = []
+        #new approach: use representative-based clustering to group similar lines, then apply purification and voting within clusters
+        
+        horiz = []
+        vert = []
 
-        # ===================== CLUSTERING =====================
-        for line in all_lines:
-            placed = False
+        for (x1, y1), (x2, y2) in all_lines:
+            if abs(y1 - y2) <= self.align_tol:
+                y = int((y1 + y2) / 2)
+                horiz.append((y, min(x1, x2), max(x1, x2)))
+            elif abs(x1 - x2) <= self.align_tol:
+                x = int((x1 + x2) / 2)
+                vert.append((x, min(y1, y2), max(y1, y2)))
 
-            for cluster in clusters:
-                if any(self._similar(line, l) for l in cluster):
-                    cluster.append(line)
-                    placed = True
-                    break
 
-            if not placed:
-                clusters.append([line])
+       
 
-        # ===================== BUILD OUTPUT WITH VOTES =====================
+        h_groups = defaultdict(list)
+        for y, x1, x2 in horiz:
+            key = int(y / self.align_tol)
+            h_groups[key].append((y, x1, x2))
+
+        v_groups = defaultdict(list)
+        for x, y1, y2 in vert:
+            key = int(x / self.align_tol)
+            v_groups[key].append((x, y1, y2))
+
+
+        h_clusters = []
+        v_clusters = []
+
+        GAP_THRESHOLD = 0.02 * scale   # tune later
+
+        # horizontal
+        for group in h_groups.values():
+            group.sort(key=lambda t: t[1])  # sort by start
+
+            cur_cluster = []
+            cur_start, cur_end = None, None
+
+            for y, s, e in group:
+                if cur_cluster == []:
+                    cur_cluster = [(y, s, e)]
+                    cur_start, cur_end = s, e
+                    continue
+
+                gap = s - cur_end
+
+                if gap <= GAP_THRESHOLD:
+                    cur_cluster.append((y, s, e))
+                    cur_end = max(cur_end, e)
+                else:
+                    h_clusters.append(cur_cluster)
+                    cur_cluster = [(y, s, e)]
+                    cur_start, cur_end = s, e
+
+            if cur_cluster:
+                h_clusters.append(cur_cluster)
+
+        # vertical
+        for group in v_groups.values():
+            group.sort(key=lambda t: t[1])  # sort by start
+
+            cur_cluster = []
+            cur_start, cur_end = None, None
+
+            for x, s, e in group:
+                if cur_cluster == []:
+                    cur_cluster = [(x, s, e)]
+                    cur_start, cur_end = s, e
+                    continue
+
+                gap = s - cur_end
+
+                if gap <= GAP_THRESHOLD:
+                    cur_cluster.append((x, s, e))
+                    cur_end = max(cur_end, e)
+                else:
+                    v_clusters.append(cur_cluster)
+                    cur_cluster = [(x, s, e)]
+                    cur_start, cur_end = s, e
+
+            if cur_cluster:
+                v_clusters.append(cur_cluster)
 
         merged_data = []
 
-        for cluster in clusters:
-            segments = self._build_segments_from_cluster(cluster)
+# ---------------- HORIZONTAL ----------------
+        for cluster in h_clusters:
+            ys = [y for y, _, _ in cluster]
+            intervals = [(s, e) for _, s, e in cluster]
 
-            for seg in segments:
-                merged_data.append({
-                    "line": seg,
-                    "votes": len(cluster)
-                })
+            y = int(np.median(ys))
 
+            intervals.sort()
+            s, e = intervals[0]
+
+            for ns, ne in intervals[1:]:
+                if ns <= e + GAP_THRESHOLD:
+                    e = max(e, ne)
+                else:
+                    merged_data.append({
+                        "line": ((int(s), int(y)), (int(e), int(y))),
+                        "votes": len(cluster)
+                    })
+                    s, e = ns, ne
+
+            merged_data.append({
+                "line": ((int(s), int(y)), (int(e), int(y))),
+                "votes": len(cluster)
+            })
+
+
+        # ---------------- VERTICAL ----------------
+        for cluster in v_clusters:
+            xs = [x for x, _, _ in cluster]
+            intervals = [(s, e) for _, s, e in cluster]
+
+            x = int(np.median(xs))
+
+            intervals.sort()
+            s, e = intervals[0]
+
+            for ns, ne in intervals[1:]:
+                if ns <= e + GAP_THRESHOLD:
+                    e = max(e, ne)
+                else:
+                    merged_data.append({
+                        "line": ((int(x), int(s)), (int(x), int(e))),
+                        "votes": len(cluster)
+                    })
+                    s, e = ns, ne
+
+            merged_data.append({
+                "line": ((int(x), int(s)), (int(x), int(e))),
+                "votes": len(cluster)
+            })
+        
         if self.debug:
             print(f"[Merge] input_lines={len(all_lines)}")
             print(f"[Merge] clusters_before_length_filter={len(merged_data)}")
-            self._print_cluster_stats(clusters)
+            print(f"[Merge] horiz_clusters={len(h_clusters)}")
+            print(f"[Merge] vert_clusters={len(v_clusters)}")
 
-        cluster_diagnostics, cluster_summary = self._analyze_clusters(clusters)
+        cluster_diagnostics, cluster_summary = self.analyze_interval_clusters(h_clusters, v_clusters)
         if self.debug:
             self._print_cluster_diagnostics(cluster_diagnostics, cluster_summary)
+
+                # clusters = []
+
+        # # ===================== CLUSTERING =====================
+        # for line in all_lines:
+        #     placed = False
+
+        #     for cluster in clusters:
+
+        #         rep = cluster[0]
+
+        #         if self._similar(line, rep):
+        #             cluster.append(line)
+        #             placed = True
+        #             break
+
+        #     if not placed:
+        #         clusters.append([line])
+
+        # ===================== BUILD OUTPUT WITH VOTES =====================
+
+        # 'merged_data = []
+
+        # for cluster in clusters:
+
+        #     # --- DRIFT CHECK ---
+        #     diag = self._analyze_clusters([cluster])[0][0]
+        #     if diag["axis_drift_std"] > self.align_tol * 1.2:
+        #         continue
+
+        #     # --- PURIFICATION ---
+        #     clean_cluster = self._filter_dominant_band(cluster)
+
+        #     if len(clean_cluster) == 0:
+        #         continue
+
+        #     # --- HANDLE SINGLE LINE ---
+        #     if len(clean_cluster) == 1:
+        #         merged_data.append({
+        #             "line": clean_cluster[0],
+        #             "votes": 1
+        #         })
+        #         continue
+
+        #     # --- SPREAD ---
+        #     spread = self._axis_spread(clean_cluster)
+
+        #     # --- CLASSIFICATION ---
+        #     if spread < 3:
+        #         # duplicate collapse
+        #         segments = self._build_segments_from_cluster(clean_cluster)
+
+        #     elif spread < self.align_tol * 1.5:
+
+        #         diag = self._analyze_clusters([clean_cluster])[0][0]
+
+        #         if diag["fragmented"]:
+        #             # IMPORTANT: do NOT collapse fragmented cluster
+        #             segments = self._build_segments_from_cluster(clean_cluster)
+        #         else:
+        #             # only collapse when truly one segment
+        #             segments = self._collapse_to_centerline(clean_cluster)
+
+        #     else:
+        #         # impure cluster
+        #         continue
+
+        #     if self.debug:
+        #         print(f"[Cluster] raw={len(cluster)} clean={len(clean_cluster)} spread={spread:.2f}")
+
+        #     for seg in segments:
+        #         merged_data.append({
+        #             "line": seg,
+        #             "votes": len(clean_cluster)
+        #         })
+
 
         # ===================== LENGTH FILTER =====================
 
@@ -89,6 +276,10 @@ class MergeSystem:
             d for d in merged_data
             if self._length(d["line"]) >= min_len
         ]
+
+        # ===================== VOTES FILTER =====================
+
+        merged_data = [d for d in merged_data if d["votes"] >= 2]
 
         if self.debug:
             removed_short = before_filter - len(merged_data)
@@ -161,7 +352,7 @@ class MergeSystem:
         angle2 = self._angle(l2)
 
         # --- robust angle check ---
-        if self._angle_diff(angle1, angle2) > 20:
+        if self._angle_diff(angle1, angle2) > 8:
             return False
 
         # --- classify orientation using angle ---
@@ -172,13 +363,29 @@ class MergeSystem:
 
         # --- horizontal case ---
         if is_horizontal:
-            if abs(y1 - yy1) < self.align_tol:
-                return self._overlap(x1, x2, xx1, xx2)
+            if abs(y1 - yy1) < self.align_tol *0.3:
+                overlap = self._overlap(x1, x2, xx1, xx2)
+                gap = max(0, max(xx1, xx2) - min(x1, x2), max(x1, x2) - min(xx1, xx2))
+                if overlap:
+                    return True
 
-        # --- vertical case ---
+                if gap < self.align_tol * 0.5:
+                    return True
+
+                return False
+
+        # --- vertical case ---`
         if is_vertical:
-            if abs(x1 - xx1) < self.align_tol:
-                return self._overlap(y1, y2, yy1, yy2)
+            if abs(x1 - xx1) < self.align_tol*0.3:
+                overlap = self._overlap(y1, y2, yy1, yy2)
+                gap = max(0, max(yy1, yy2) - min(y1, y2), max(y1, y2) - min(yy1, yy2))
+                if overlap:
+                    return True
+
+                if gap < self.align_tol * 0.5:
+                    return True
+
+                return False
 
         return False
 
@@ -188,13 +395,137 @@ class MergeSystem:
             max(b1, b2) < min(a1, a2) - self.overlap_tol
         )
 
-    # ===================== REPRESENTATIVE =====================
+    # ===================== REPRESENTATIVE and  cluster purification  =====================
 
     def _representative(self, cluster: List[Line]) -> Line:
         return max(
             cluster,
             key=lambda l: (l[1][0] - l[0][0]) ** 2 + (l[1][1] - l[0][1]) ** 2
         )
+    
+   # def _filter_dominant_band(self, cluster: List[Line]) -> List[Line]:
+        orientation = self._cluster_orientation(cluster)
+
+        if orientation == "H":
+            vals = [(y1 + y2) / 2 for (x1,y1),(x2,y2) in cluster]
+        else:
+            vals = [(x1 + x2) / 2 for (x1,y1),(x2,y2) in cluster]
+
+        # scale-aware bin size
+        bin_size = max(2, self.align_tol * 0.15)
+
+        bins = {}
+        for i, v in enumerate(vals):
+            key = int(round(v / bin_size)) * bin_size
+            bins.setdefault(key, []).append(cluster[i])
+
+        dominant = max(bins.values(), key=len)
+        return dominant
+    
+    def _collapse_to_centerline(self, cluster: List[Line]) -> List[Line]:
+        orientation = self._cluster_orientation(cluster)
+
+        intervals = []
+
+        if orientation == "H":
+            ys = [(y1 + y2)/2 for (x1,y1),(x2,y2) in cluster]
+            center_y = int(round(np.mean(ys)))
+
+            for (x1,y1),(x2,y2) in cluster:
+                intervals.append((min(x1,x2), max(x1,x2)))
+
+            intervals.sort()
+            merged = []
+            gap_tol = self.align_tol * 1.5
+            s, e = intervals[0]
+
+            for ns, ne in intervals[1:]:
+                if ns <= e + gap_tol:
+                    e = max(e, ne)
+                else:
+                    merged.append((s, e))
+                    s, e = ns, ne
+            merged.append((s, e))
+
+            return [((int(s), center_y),(int(e), center_y)) for s,e in merged]
+
+        else:
+            xs = [(x1 + x2)/2 for (x1,y1),(x2,y2) in cluster]
+            center_x = int(round(np.mean(xs)))
+
+            for (x1,y1),(x2,y2) in cluster:
+                intervals.append((min(y1,y2), max(y1,y2)))
+
+            intervals.sort()
+            merged = []
+            gap_tol = self.align_tol * 1.5
+            s, e = intervals[0]
+
+            for ns, ne in intervals[1:]:
+                if ns <= e + gap_tol:
+                    e = max(e, ne)
+                else:
+                    merged.append((s, e))
+                    s, e = ns, ne
+            merged.append((s, e))
+
+            return [((center_x, int(s)),(center_x, int(e))) for s,e in merged]
+        
+
+   # def _merge_similar_lines(self, merged_data):
+
+        final = []
+        used = [False] * len(merged_data)
+
+        for i, d1 in enumerate(merged_data):
+            if used[i]:
+                continue
+
+            (x1, y1), (x2, y2) = d1["line"]
+
+            group = [d1]
+            used[i] = True
+
+            for j, d2 in enumerate(merged_data):
+                if used[j]:
+                    continue
+
+                (xx1, yy1), (xx2, yy2) = d2["line"]
+
+                # orientation check
+                if self._angle_diff(self._angle(d1["line"]), self._angle(d2["line"])) > 5:
+                    continue
+
+                # SAME AXIS (tight)
+                if abs(y1 - yy1) < self.align_tol * 0.2 or abs(x1 - xx1) < self.align_tol * 0.2:
+                    group.append(d2)
+                    used[j] = True
+
+            # merge group
+            lines = [g["line"] for g in group]
+            votes = sum(g["votes"] for g in group)
+
+            orientation = self._cluster_orientation(lines)
+
+            if orientation == "H":
+                y = int(round(np.mean([(l[0][1] + l[1][1]) / 2 for l in lines])))
+                xs = [p[0] for l in lines for p in l]
+
+                final.append({
+                    "line": ((min(xs), y), (max(xs), y)),
+                    "votes": votes
+                })
+
+            else:
+                x = int(round(np.mean([(l[0][0] + l[1][0]) / 2 for l in lines])))
+                ys = [p[1] for l in lines for p in l]
+
+                final.append({
+                    "line": ((x, min(ys)), (x, max(ys))),
+                    "votes": votes
+                })
+
+        return final
 
     # ===================== LENGTH =====================
 
@@ -210,6 +541,17 @@ class MergeSystem:
     def _angle_diff(self, a, b):
         diff = abs(a - b) % 180
         return min(diff, 180 - diff)
+    
+
+    def _axis_spread(self, cluster):
+        orientation = self._cluster_orientation(cluster)
+
+        if orientation == "H":
+            vals = [(y1 + y2) / 2 for (x1,y1),(x2,y2) in cluster]
+        else:
+            vals = [(x1 + x2) / 2 for (x1,y1),(x2,y2) in cluster]
+
+        return max(vals) - min(vals)
 
     def _orientation_bucket(self, line: Line) -> str:
         angle = self._angle(line)
@@ -251,9 +593,10 @@ class MergeSystem:
 
         merged = []
         cur_start, cur_end = intervals[0]
+        gap_tol = self.align_tol * 1.5
 
         for start, end in intervals[1:]:
-            if start <= cur_end + self.overlap_tol:
+            if start <= cur_end + gap_tol:
                 cur_end = max(cur_end, end)
             else:
                 merged.append((cur_start, cur_end))
@@ -274,85 +617,77 @@ class MergeSystem:
         return lines
 
 
-    def _analyze_clusters(self, clusters: List[List[Line]]):
+    def analyze_interval_clusters(self, h_clusters, v_clusters):
+
         diagnostics = []
 
-        for cluster_id, cluster in enumerate(clusters, start=1):
-            if not cluster:
-                continue
-
-            orientation = self._cluster_orientation(cluster)
-            axis = "x" if orientation == "V" else "y"
-            cross_values = []
-            spans = []
+        def process(cluster, orientation, cluster_id):
+            axis_vals = []
             intervals = []
 
-            for line in cluster:
-                (x1, y1), (x2, y2) = line
-                mid_x = (x1 + x2) / 2.0
-                mid_y = (y1 + y2) / 2.0
+            if orientation == "H":
+                for y, s, e in cluster:
+                    axis_vals.append(y)
+                    intervals.append((s, e))
+                axis_name = "y"
+            else:
+                for x, s, e in cluster:
+                    axis_vals.append(x)
+                    intervals.append((s, e))
+                axis_name = "x"
 
-                if axis == "x":
-                    cross_values.append(mid_x)
-                    span_a = min(y1, y2)
-                    span_b = max(y1, y2)
-                else:
-                    cross_values.append(mid_y)
-                    span_a = min(x1, x2)
-                    span_b = max(x1, x2)
+            # ---- DRIFT ----
+            drift_std = float(np.std(axis_vals))
+            drift_flag = drift_std > self.align_tol
 
-                spans.extend([span_a, span_b])
-                intervals.append((span_a, span_b))
-
-            drift_std = float(np.std(cross_values)) if cross_values else 0.0
-            drift_flag = bool(drift_std > float(self.align_tol or 0.0))
-
-            intervals.sort(key=lambda pair: pair[0])
+            # ---- INTERVAL ANALYSIS ----
+            intervals.sort()
             gaps = []
-            overlap_pairs = 0
-            for idx in range(len(intervals) - 1):
-                curr_start, curr_end = intervals[idx]
-                next_start, next_end = intervals[idx + 1]
-                gap = next_start - curr_end
+
+            for i in range(len(intervals) - 1):
+                cur_s, cur_e = intervals[i]
+                next_s, next_e = intervals[i + 1]
+
+                gap = next_s - cur_e
                 if gap > 0:
-                    gaps.append(float(gap))
-                if next_start <= curr_end + float(self.overlap_tol or 0.0):
-                    overlap_pairs += 1
+                    gaps.append(gap)
 
-            gaps_gt_align_tol = int(sum(1 for g in gaps if g > float(self.align_tol or 0.0)))
-            fragmented = bool(gaps_gt_align_tol > 0)
+            fragmented = any(g > self.align_tol for g in gaps)
 
-            span_min = float(min(spans)) if spans else 0.0
-            span_max = float(max(spans)) if spans else 0.0
+            span_min = min(s for s, _ in intervals)
+            span_max = max(e for _, e in intervals)
 
-            votes = [len(cluster)]
             diagnostics.append({
-                "cluster_id": int(cluster_id),
-                "num_lines": int(len(cluster)),
+                "cluster_id": cluster_id,
                 "orientation": orientation,
+                "num_segments": len(cluster),
+                "axis": axis_name,
                 "axis_drift_std": drift_std,
                 "drift_flag": drift_flag,
-                "drift_metric": f"std({axis})",
-                "span_min": span_min,
-                "span_max": span_max,
-                "vote_min": int(min(votes) if votes else 0),
-                "vote_max": int(max(votes) if votes else 0),
-                "vote_avg": float(np.mean(votes) if votes else 0.0),
-                "gap_min": float(min(gaps)) if gaps else 0.0,
-                "gap_max": float(max(gaps)) if gaps else 0.0,
-                "gap_avg": float(np.mean(gaps)) if gaps else 0.0,
-                "gap_count": int(len(gaps)),
-                "gaps_gt_align_tol": gaps_gt_align_tol,
-                "fragmented": fragmented,
-                "overlap_pairs": int(overlap_pairs),
+                "span": (span_min, span_max),
+                "gap_count": len(gaps),
+                "gap_max": max(gaps) if gaps else 0,
+                "gap_avg": float(np.mean(gaps)) if gaps else 0,
+                "fragmented": fragmented
             })
 
-        cluster_sizes = [d["num_lines"] for d in diagnostics]
+        # process horizontal
+        cid = 1
+        for cluster in h_clusters:
+            process(cluster, "H", cid)
+            cid += 1
+
+        # process vertical
+        for cluster in v_clusters:
+            process(cluster, "V", cid)
+            cid += 1
+
+        # ---- SUMMARY ----
         summary = {
-            "total_clusters": int(len(diagnostics)),
-            "clusters_flagged_drift": int(sum(1 for d in diagnostics if d["drift_flag"])),
-            "clusters_fragmented": int(sum(1 for d in diagnostics if d["fragmented"])),
-            "avg_cluster_size": float(np.mean(cluster_sizes)) if cluster_sizes else 0.0,
+            "total_clusters": len(diagnostics),
+            "fragmented_clusters": sum(1 for d in diagnostics if d["fragmented"]),
+            "drifted_clusters": sum(1 for d in diagnostics if d["drift_flag"]),
+            "avg_cluster_size": np.mean([d["num_segments"] for d in diagnostics]) if diagnostics else 0
         }
 
         return diagnostics, summary
@@ -370,28 +705,31 @@ class MergeSystem:
             return "H"
         return "V"
 
-    def _print_cluster_diagnostics(self, diagnostics: List[Dict], summary: Dict):
-        if not diagnostics:
-            print("\n========== MERGE CLUSTER DIAGNOSTICS ==========")
-            print("No clusters available.")
-            return
-
+    def _print_cluster_diagnostics(self, diagnostics, summary):
         print("\n========== MERGE CLUSTER DIAGNOSTICS ==========")
+
         for d in diagnostics:
-            axis_label = "x" if d["orientation"] == "V" else "y"
-            span_label = "y-range" if d["orientation"] == "V" else "x-range"
+            axis = "x" if d["orientation"] == "V" else "y"
+
+            span = d.get("span", (0, 0))
+
             print(
-                f"cluster_id={d['cluster_id']} lines={d['num_lines']} orientation={d['orientation']} "
-                f"std({axis_label})={d['axis_drift_std']:.2f} span({span_label})=[{d['span_min']:.2f},{d['span_max']:.2f}] "
-                f"votes(min/max/avg)={d['vote_min']}/{d['vote_max']}/{d['vote_avg']:.2f} "
-                f"gaps(min/max/avg/count/>tol)={d['gap_min']:.2f}/{d['gap_max']:.2f}/{d['gap_avg']:.2f}/{d['gap_count']}/{d['gaps_gt_align_tol']} "
-                f"overlap_pairs={d['overlap_pairs']} drift_flag={d['drift_flag']} fragmented={d['fragmented']}"
+                f"cluster_id={d['cluster_id']} "
+                f"num_segments={d['num_segments']} "
+                f"orientation={d['orientation']} "
+                f"std({axis})={d['axis_drift_std']:.2f} "
+                f"span=[{span[0]:.2f},{span[1]:.2f}] "
+                f"gap_max={d['gap_max']:.2f} "
+                f"gap_avg={d['gap_avg']:.2f} "
+                f"gap_count={d['gap_count']} "
+                f"fragmented={d['fragmented']} "
+                f"drift_flag={d['drift_flag']}"
             )
 
         print("\n========== MERGE CLUSTER SUMMARY ==========")
         print(f"total_clusters={summary.get('total_clusters', 0)}")
-        print(f"clusters_flagged_drift={summary.get('clusters_flagged_drift', 0)}")
-        print(f"clusters_fragmented={summary.get('clusters_fragmented', 0)}")
+        print(f"fragmented_clusters={summary.get('fragmented_clusters', 0)}")
+        print(f"drifted_clusters={summary.get('drifted_clusters', 0)}")
         print(f"avg_cluster_size={summary.get('avg_cluster_size', 0.0):.2f}")
 
     def _print_vote_hist(self, votes: List[int]):

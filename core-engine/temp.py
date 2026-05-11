@@ -7,7 +7,7 @@ import argparse
 from core.image_manager import InputController
 from core.normalizer import Normalizer
 from core.wall_detector import WallDetector
-from core.merger import MergeSystem
+from core.merge_system import MergeSystemV2
 from core.point_normalizer import PointNormalizer
 from core.segment_connector import SegmentConnector
 from core.intersection_split import IntersectionSplitter
@@ -171,87 +171,6 @@ def print_connector_debug_stats(merged_data, connected_data):
     print(f"deg4+={sum(1 for v in vals if v >= 4)}")
 
 
-def print_merger_debug_stats(stats):
-    print("\n========== MERGER DEBUG STATS ==========")
-    if not stats:
-        print("No merger stats available.")
-        return
-
-    print(f"scale={stats.get('scale', 0.0):.2f}")
-    print(f"align_tol={stats.get('align_tol', 0.0):.2f}")
-    print(f"input_lines={stats.get('input_lines', 0)}")
-    print(f"clusters_before_length_filter={stats.get('clusters_before_length_filter', 0)}")
-    print(f"merged_count={stats.get('merged_count', 0)}")
-    print(f"removed_short={stats.get('removed_short', 0)}")
-
-    votes = stats.get("votes", [])
-    if votes:
-        print(
-            f"votes(min/max/avg/median)={min(votes)}/{max(votes)}/{np.mean(votes):.2f}/{np.median(votes):.2f}"
-        )
-    else:
-        print("votes(min/max/avg/median)=0/0/0.00/0.00")
-
-    raw_lengths = stats.get("raw_lengths", [])
-    if raw_lengths:
-        print(
-            "raw_lengths(min/max/avg/median)="
-            f"{min(raw_lengths):.2f}/{max(raw_lengths):.2f}/{np.mean(raw_lengths):.2f}/{np.median(raw_lengths):.2f}"
-        )
-
-    merged_lengths = stats.get("merged_lengths", [])
-    if merged_lengths:
-        print(
-            "merged_lengths(min/max/avg/median)="
-            f"{min(merged_lengths):.2f}/{max(merged_lengths):.2f}/{np.mean(merged_lengths):.2f}/{np.median(merged_lengths):.2f}"
-        )
-
-    print(f"endpoint_total={stats.get('endpoint_total', 0)}")
-    print(f"endpoint_unique={stats.get('endpoint_unique', 0)}")
-    print(f"endpoint_duplicates={stats.get('endpoint_duplicates', 0)}")
-
-    near_stats = stats.get("near_endpoint_cluster", {})
-    if near_stats:
-        print("\n========== NEAR ENDPOINT CLUSTERS ==========")
-        print(f"num_clusters={near_stats.get('num_clusters', 0)}")
-        print(f"avg_cluster_size={near_stats.get('avg_cluster_size', 0.0):.2f}")
-        print(f"max_cluster_size={near_stats.get('max_cluster_size', 0)}")
-        print(f"clusters_gt_2={near_stats.get('clusters_gt_2', 0)}")
-        print("\n========== NEAR CLUSTER DISTRIBUTION ==========")
-        print(f"clusters_size_1={near_stats.get('clusters_size_1', 0)}")
-        print(f"clusters_size_2={near_stats.get('clusters_size_2', 0)}")
-        print(f"clusters_size_3+={near_stats.get('clusters_size_3_plus', 0)}")
-
-    cluster_diagnostics = stats.get("cluster_diagnostics", [])
-    if cluster_diagnostics:
-        print("\n========== MERGE CLUSTER DIAGNOSTICS ==========")
-        for d in cluster_diagnostics:
-            orientation = d.get("orientation", "H")
-            drift_axis = "x" if orientation == "V" else "y"
-            span_label = "y-range" if orientation == "V" else "x-range"
-            print(
-                f"cluster_id={d.get('cluster_id', 0)} "
-                f"num_lines={d.get('num_lines', 0)} "
-                f"orientation={orientation} "
-                f"std({drift_axis})={float(d.get('axis_drift_std', 0.0)):.2f} "
-                f"span({span_label})=[{float(d.get('span_min', 0.0)):.2f},{float(d.get('span_max', 0.0)):.2f}] "
-                f"votes(min/max/avg)={d.get('vote_min', 0)}/{d.get('vote_max', 0)}/{float(d.get('vote_avg', 0.0)):.2f} "
-                f"gaps(min/max/avg/count/>tol)="
-                f"{float(d.get('gap_min', 0.0)):.2f}/{float(d.get('gap_max', 0.0)):.2f}/"
-                f"{float(d.get('gap_avg', 0.0)):.2f}/{d.get('gap_count', 0)}/{d.get('gaps_gt_align_tol', 0)} "
-                f"overlap_pairs={d.get('overlap_pairs', 0)} "
-                f"drift_flag={d.get('drift_flag', False)}"
-            )
-
-    cluster_summary = stats.get("cluster_summary", {})
-    if cluster_summary:
-        print("\n========== MERGE CLUSTER SUMMARY ==========")
-        print(f"total_clusters={cluster_summary.get('total_clusters', 0)}")
-        print(f"clusters_flagged_drift={cluster_summary.get('clusters_flagged_drift', 0)}")
-        print(f"clusters_fragmented={cluster_summary.get('clusters_fragmented', 0)}")
-        print(f"avg_cluster_size={float(cluster_summary.get('avg_cluster_size', 0.0)):.2f}")
-
-
 def room_stats(rooms, label=""):
     print(f"\n===== {label} =====")
     print(f"Rooms: {len(rooms)}")
@@ -349,9 +268,8 @@ def testing(image_path="core-engine/images/floor.jpg", visualize=True):
     detections = wall_detector.detect(det_inputs)
 
     print("[3] Merge hypotheses...")
-    merger = MergeSystem(debug=True)
+    merger = MergeSystemV2(debug=True)
     merged = merger.merge(detections)
-    print_merger_debug_stats(merger.last_debug_stats)
 
     if visualize:
         show_image("MERGED - Vote View (Red weak / Orange medium / Yellow strong / Green very strong)", overlay_merge_votes(img, merged, thickness=2))
@@ -369,7 +287,7 @@ def testing(image_path="core-engine/images/floor.jpg", visualize=True):
     print(f"[PointNormalizer] lines={len(normalized_lines)}")
     print(f"[PointNormalizer] before_after={len(merged)}->{len(normalized_lines)}")
     # collect horizontal lines
-    lines = [d["line"] for d in normalized_lines if abs(d["line"][0][1] - d["line"][1][1]) < 5]
+    lines = [d["line"] for d in normalized_lines if abs(d["line"][0][1] - d["line"][1][1]) < merger.align_tol]
 
     # normalize to (y, x_start, x_end)
     norm = []
@@ -383,7 +301,7 @@ def testing(image_path="core-engine/images/floor.jpg", visualize=True):
     groups = defaultdict(list)
 
     for y, x1, x2 in norm:
-        key = round(y / 5)   # coarse grouping
+        key = round(y / merger.align_tol)   # coarse grouping
         groups[key].append((y, x1, x2))
 
     # analyze each group
