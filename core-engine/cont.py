@@ -6,6 +6,7 @@ from core.image_manager import InputController
 from core.normalizer import Normalizer
 from core.wall_detector import WallDetector
 from core.merge_system import MergeSystemV2, visualize_merger_v2
+from core.wall_interfernce import ThicknessInference
 
 
 def to_numpy(image):
@@ -23,6 +24,10 @@ def resize_for_display(img, max_width=700, max_height=700):
 
 
 def show(img, name="preview"):
+    if img is None:
+        print(f"[preview skipped] {name} (no image)")
+        return
+
     preview = resize_for_display(img)
 
     try:
@@ -77,10 +82,18 @@ def temp_merger_controller(image_path, debug=True, visualize=True):
 
     print(f"[Controller] final_lines = {len(final_data)}")
 
+    # -------- THICKNESS INFERENCE --------
+    thickness_inference = ThicknessInference(debug=debug)
+    wall_objects = thickness_inference.infer_walls(final_data)
+
+    print(f"[Controller] inferred_walls = {len(wall_objects)}")
+
     # -------- VISUALIZE --------
     if visualize:
         vis = visualize_merger_v2(img, h_clusters, v_clusters, final_data)
         show(vis, "MERGER V2 DEBUG VIEW")
+
+        thickness_inference.visualize(img, final_data, wall_objects)
     else:
         print("[Controller] visualization disabled")
 

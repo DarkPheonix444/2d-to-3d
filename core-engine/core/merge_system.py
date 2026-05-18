@@ -156,9 +156,30 @@ class MergeSystemV2:
                 line = self.construct_from_cluster(cluster, "H")
                 # line = self.collapse_to_centerline(lines_input)
 
+                length = abs(line[1][0] - line[0][0])
+
                 merged_data.append({
+                    "id": len(merged_data),
+
                     "line": line,
-                    "votes": len(cluster)
+
+                    "orientation": "H",
+
+                    "axis": line[0][1],
+
+                    "length": length,
+
+                    "support_count": len(cluster),
+
+                    "supporting_segments": cluster,
+
+                    "natural_intersections": [],
+
+                    "neighbors": [],
+
+                    "continuity_links": [],
+
+                    "confidence": float(len(cluster))
                 })
 
         # VERTICAL
@@ -167,12 +188,32 @@ class MergeSystemV2:
         for cluster in v_clusters:
             line = self.construct_from_cluster(cluster, "V")
             # line = self.collapse_to_centerline(lines_input)
+            length = abs(line[1][1] - line[0][1])
 
             merged_data.append({
+                "id": len(merged_data),
+
                 "line": line,
-                "votes": len(cluster)
+
+                "orientation": "V",
+
+                "axis": line[0][0],
+
+                "length": length,
+
+                "support_count": len(cluster),
+
+                "supporting_segments": cluster,
+
+                "natural_intersections": [],
+
+                "neighbors": [],
+
+                "continuity_links": [],
+
+                "confidence": float(len(cluster))
             })
-        final_data = self.collapse_axis_duplicates(merged_data, tol=self.align_tol)
+        final_data = self.remove_same_axis_redundancy(merged_data,)
         
         # -------- DEBUG --------
 
@@ -310,95 +351,121 @@ class MergeSystemV2:
                     merged.append([s, e])
 
             return merged
+
+    def remove_same_axis_redundancy(self, lines):
+
+        used = [False] * len(lines)
+        final = []
+
+        for i in range(len(lines)):
+
+            if used[i]:
+                continue
+
+            best = lines[i]
+            used[i] = True
+
+            l1 = lines[i]["line"]
+            o1 = lines[i]["orientation"]
+
+            # ---------- LINE 1 ----------
+            if o1 == "H":
+
+                axis1 = l1[0][1]
+
+                s1, e1 = sorted([l1[0][0], l1[1][0]])
+
+            else:
+
+                axis1 = l1[0][0]
+
+                s1, e1 = sorted([l1[0][1], l1[1][1]])
+
+            len1 = e1 - s1
+
+            # ---------- COMPARE ----------
+            for j in range(i + 1, len(lines)):
+
+                if used[j]:
+                    continue
+
+                l2 = lines[j]["line"]
+                o2 = lines[j]["orientation"]
+
+                # orientation mismatch
+                if o1 != o2:
+                    continue
+
+                # ---------- LINE 2 ----------
+                if o2 == "H":
+
+                    axis2 = l2[0][1]
+
+                    # ONLY exact same axis
+                    if axis1 != axis2:
+                        continue
+
+                    s2, e2 = sorted([l2[0][0], l2[1][0]])
+
+                else:
+
+                    axis2 = l2[0][0]
+
+                    if axis1 != axis2:
+                        continue
+
+                    s2, e2 = sorted([l2[0][1], l2[1][1]])
+
+                len2 = e2 - s2
+
+                # ---------- OVERLAP ----------
+                overlap = min(e1, e2) - max(s1, s2)
+
+                if overlap <= 0:
+                    continue
+
+                overlap_ratio = overlap / min(len1, len2)
+
+                # strong containment / redundancy
+                if overlap_ratio >= 0.8:
+
+                    # keep larger representative
+                    if len2 > len1:
+                        best = lines[j]
+                        len1 = len2
+                        s1, e1 = s2, e2
+
+                    used[j] = True
+
+            final.append(best)
+
+        return final
     
     def construct_from_cluster(self, cluster, orientation):
-
-        GAP_THRESHOLD = 5  # or pass from outer if you want consistency
 
         if orientation == "H":
 
             axis_vals = [y for y, _, _ in cluster]
             intervals = [(s, e) for _, s, e in cluster]
 
-            spread = max(axis_vals) - min(axis_vals)
+            axis = int(np.median(axis_vals))
 
-            intervals.sort()
+            start = min(s for s, _ in intervals)
+            end = max(e for _, e in intervals)
 
-            # -------- CASE 1: THICKNESS → COLLAPSE --------
-            if spread <= self.align_tol:
-                center = int(np.median(axis_vals))
-
-                s, e = intervals[0]
-                segments = []
-
-                for ns, ne in intervals[1:]:
-                    if ns <= e + GAP_THRESHOLD:
-                        e = max(e, ne)
-                    else:
-                        segments.append((s, e))
-                        s, e = ns, ne
-
-                segments.append((s, e))
-
-                # return SINGLE if continuous
-                if len(segments) == 1:
-                    s, e = segments[0]
-                    return ((int(s), center), (int(e), center))
-
-                # fragmented → return first major segment only (SAFE for now)
-                s, e = max(segments, key=lambda seg: seg[1] - seg[0])
-                return ((int(s), center), (int(e), center))
-
-            # -------- CASE 2: NOT PURE → NO COLLAPSE --------
-            else:
-                y = int(np.mean(axis_vals))
-                s = min(i[0] for i in intervals)
-                e = max(i[1] for i in intervals)
-
-                return ((int(s), int(y)), (int(e), int(y)))
-
-
-        # ================= VERTICAL =================
+            return ((start, axis), (end, axis))
 
         else:
 
             axis_vals = [x for x, _, _ in cluster]
             intervals = [(s, e) for _, s, e in cluster]
 
-            spread = max(axis_vals) - min(axis_vals)
+            axis = int(np.median(axis_vals))
 
-            intervals.sort()
+            start = min(s for s, _ in intervals)
+            end = max(e for _, e in intervals)
 
-            # -------- CASE 1: THICKNESS → COLLAPSE --------
-            if spread <= self.align_tol:
-                center = int(np.median(axis_vals))
-
-                s, e = intervals[0]
-                segments = []
-
-                for ns, ne in intervals[1:]:
-                    if ns <= e + GAP_THRESHOLD:
-                        e = max(e, ne)
-                    else:
-                        segments.append((s, e))
-                        s, e = ns, ne
-
-                segments.append((s, e))
-
-                if len(segments) == 1:
-                    s, e = segments[0]
-                    return ((center, int(s)), (center, int(e)))
-
-                s, e = max(segments, key=lambda seg: seg[1] - seg[0])
-                return ((center, int(s)), (center, int(e)))
-
-            # -------- CASE 2: NOT PURE --------
-            else:
-                x = int(np.mean(axis_vals))
-                s = min(i[0] for i in intervals)
-                e = max(i[1] for i in intervals)
-
-                return ((int(x), int(s)), (int(x), int(e)))
+            return ((axis, start), (axis, end))
     
 
     def collapse_axis_duplicates(self, lines, tol=5):
@@ -473,7 +540,7 @@ def visualize_merger_v2(image, h_clusters, v_clusters, merged_data):
     # Draw merged walls
     for d in merged_data:
         (x1, y1), (x2, y2) = d["line"]
-        votes = d["votes"]
+        votes = d["support_count"]
 
         if votes <= 2:
             color = (0, 0, 255)
