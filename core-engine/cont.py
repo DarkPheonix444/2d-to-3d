@@ -103,4 +103,4 @@ def temp_merger_controller(image_path, debug=True, visualize=True):
 
 
 if __name__ == "__main__":
-    temp_merger_controller("core-engine/images/test7.jpg")
+    temp_merger_controller("core-engine/v1images/test1.png")
