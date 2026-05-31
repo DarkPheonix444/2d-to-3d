@@ -8,7 +8,7 @@ class ThicknessInference:
         self,
         axis_tol=6,
         overlap_ratio_thresh=0.6,
-        debug=False
+        debug=True
     ):
 
         self.axis_tol = axis_tol
@@ -638,59 +638,83 @@ class ThicknessInference:
         vis = image.copy()
 
         # --------------------------------------------------
-        # DRAW EDGE CANDIDATES
+        # DRAW WALL OBJECTS
         # --------------------------------------------------
 
-        for e in edge_candidates:
-
-            (x1, y1), (x2, y2) = e["line"]
-
-            cv2.line(
-                vis,
-                (int(x1), int(y1)),
-                (int(x2), int(y2)),
-                (180, 180, 180),
-                1
-            )
-
-        # --------------------------------------------------
-        # DRAW WALL CENTERLINES
-        # --------------------------------------------------
+        edge_lookup = {
+            e["id"]: e
+            for e in edge_candidates
+        }
 
         for w in wall_objects:
 
-            (x1, y1), (x2, y2) = w["centerline"]
+            # ------------------------------------------
+            # DRAW SOURCE EDGES
+            # ------------------------------------------
 
-            thickness = max(2, int(w["thickness"]))
+            if "edge_ids" in w:
+
+                edge_a = edge_lookup.get(w["edge_ids"][0])
+                edge_b = edge_lookup.get(w["edge_ids"][1])
+
+                if edge_a:
+                    (x1,y1),(x2,y2) = edge_a["line"]
+
+                    cv2.line(
+                        vis,
+                        (int(x1),int(y1)),
+                        (int(x2),int(y2)),
+                        (255,0,0),      # BLUE
+                        2
+                    )
+
+                if edge_b:
+                    (x1,y1),(x2,y2) = edge_b["line"]
+
+                    cv2.line(
+                        vis,
+                        (int(x1),int(y1)),
+                        (int(x2),int(y2)),
+                        (0,0,255),      # RED
+                        2
+                    )
+
+            # ------------------------------------------
+            # DRAW CENTERLINE
+            # ------------------------------------------
+
+            (x1,y1),(x2,y2) = w["centerline"]
 
             cv2.line(
                 vis,
-                (int(x1), int(y1)),
-                (int(x2), int(y2)),
-                (0, 255, 0),
-                thickness
+                (int(x1),int(y1)),
+                (int(x2),int(y2)),
+                (0,255,0),             # GREEN
+                2
             )
 
-            # ----------------------------------------------
-            # WALL ID
-            # ----------------------------------------------
+            # ------------------------------------------
+            # LABEL
+            # ------------------------------------------
 
-            cx = int((x1 + x2) / 2)
-            cy = int((y1 + y2) / 2)
+            cx = int((x1+x2)/2)
+            cy = int((y1+y2)/2)
+
+            label = (
+                f"{w['wall_id']} "
+                f"T:{w['thickness']}"
+            )
 
             cv2.putText(
                 vis,
-                str(w["wall_id"]),
-                (cx, cy),
+                label,
+                (cx,cy),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.4,
-                (0, 0, 255),
+                (0,255,255),
                 1
             )
-
-        # --------------------------------------------------
-        # RESIZE
-        # --------------------------------------------------
+            
 
         h, w = vis.shape[:2]
 
@@ -708,6 +732,7 @@ class ThicknessInference:
             )
         )
 
+     
         cv2.imshow(
             "Thickness Inference",
             vis

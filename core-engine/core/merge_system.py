@@ -331,6 +331,7 @@ class MergeSystemV2:
                             print(f"  L2: {final_data[j]['line']}")
                             print(f"  axis_diff = {axis_diff}, overlap = {overlap}")
         if self.debug:
+            print("final data length=", len(final_data))
             return final_data, h_clusters, v_clusters
 
         return final_data
@@ -528,31 +529,120 @@ def visualize_merger_v2(image, h_clusters, v_clusters, merged_data):
 
     vis = image.copy()
 
+    # -----------------------------
     # Draw clusters (light grey)
+    # -----------------------------
     for cluster in h_clusters:
         for y, s, e in cluster:
-            cv2.line(vis, (int(s), int(y)), (int(e), int(y)), (200, 200, 200), 1)
+            cv2.line(
+                vis,
+                (int(s), int(y)),
+                (int(e), int(y)),
+                (200, 200, 200),
+                1
+            )
 
     for cluster in v_clusters:
         for x, s, e in cluster:
-            cv2.line(vis, (int(x), int(s)), (int(x), int(e)), (200, 200, 200), 1)
+            cv2.line(
+                vis,
+                (int(x), int(s)),
+                (int(x), int(e)),
+                (200, 200, 200),
+                1
+            )
 
+    # -----------------------------
+    # Build overlap map
+    # -----------------------------
+    overlap_count = [0] * len(merged_data)
+
+    for i in range(len(merged_data)):
+        (x1, y1), (x2, y2) = merged_data[i]["line"]
+
+        for j in range(i + 1, len(merged_data)):
+            (x3, y3), (x4, y4) = merged_data[j]["line"]
+
+            # Horizontal overlap
+            if abs(y1 - y2) < 2 and abs(y3 - y4) < 2:
+
+                if abs(y1 - y3) <= 5:
+
+                    overlap = min(x2, x4) - max(x1, x3)
+
+                    if overlap > 0:
+                        overlap_count[i] += 1
+                        overlap_count[j] += 1
+
+            # Vertical overlap
+            elif abs(x1 - x2) < 2 and abs(x3 - x4) < 2:
+
+                if abs(x1 - x3) <= 5:
+
+                    overlap = min(y2, y4) - max(y1, y3)
+
+                    if overlap > 0:
+                        overlap_count[i] += 1
+                        overlap_count[j] += 1
+
+    # -----------------------------
     # Draw merged walls
-    for d in merged_data:
+    # -----------------------------
+    for idx, d in enumerate(merged_data):
+
         (x1, y1), (x2, y2) = d["line"]
         votes = d["support_count"]
 
-        if votes <= 2:
-            color = (0, 0, 255)
-        elif votes <= 4:
-            color = (0, 165, 255)
-        elif votes <= 7:
-            color = (0, 255, 255)
+        overlaps = overlap_count[idx]
+
+        # -------------------------
+        # Color by overlap count
+        # -------------------------
+        if overlaps == 0:
+            color = (0, 255, 0)       # green
+        elif overlaps == 1:
+            color = (0, 255, 255)     # yellow
+        elif overlaps == 2:
+            color = (0, 165, 255)     # orange
         else:
-            color = (0, 255, 0)
+            color = (0, 0, 255)       # red
 
-        thickness = 2 if votes < 5 else 3
+        # -------------------------
+        # Offset overlapping lines
+        # -------------------------
+        offset = overlaps * 2
 
-        cv2.line(vis, (int(x1), int(y1)), (int(x2), int(y2)), color, thickness)
+        if abs(y1 - y2) < 2:
+            y1 += offset
+            y2 += offset
+
+        elif abs(x1 - x2) < 2:
+            x1 += offset
+            x2 += offset
+
+        thickness = 2
+
+        cv2.line(
+            vis,
+            (int(x1), int(y1)),
+            (int(x2), int(y2)),
+            color,
+            thickness
+        )
+
+        # Optional: display support count
+        cx = int((x1 + x2) / 2)
+        cy = int((y1 + y2) / 2)
+
+        cv2.putText(
+            vis,
+            str(votes),
+            (cx, cy),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.35,
+            color,
+            1,
+            cv2.LINE_AA
+        )
 
     return vis
