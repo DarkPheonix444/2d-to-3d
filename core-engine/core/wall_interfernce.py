@@ -263,7 +263,12 @@ class ThicknessInference:
                     ],
 
                     "confidence": best_score,
-                    "consumed":False
+
+                    "generator": "thickness_inference",
+
+                    "parent_ids": [],
+
+                    "consumed": False
                 })
 
                 used.add(i)
@@ -602,10 +607,13 @@ class ThicknessInference:
 
                 "confidence": confidence,
 
-                "source_walls": consumed_ids,
+                "parent_ids": consumed_ids,
+
+                "generator": "chain_reconstruction",
 
                 "reconstructed": True,
-                "consumed":False
+
+                "consumed": False
             })
 
             if self.debug:
