@@ -72,12 +72,12 @@ def temp_merger_controller(image_path, debug=True, visualize=True):
 
     # -------- HANDLE RETURN CONTRACT --------
     if merger.debug:
-        if not isinstance(result, tuple) or len(result) != 3:
-            raise ValueError("MergeSystemV2 must return (final_data, h_clusters, v_clusters) in debug mode")
+        if not isinstance(result, tuple) or len(result) != 4:
+            raise ValueError("MergeSystemV2 must return (final_data, h_clusters, v_clusters, parallel_lines) in debug mode")
 
-        final_data, h_clusters, v_clusters = result
+        final_data, h_clusters, v_clusters, parallel_lines = result
     else:
-        final_data = result
+        final_data, parallel_lines = result
         h_clusters, v_clusters = [], []
 
     print(f"[Controller] final_lines = {len(final_data)}")
@@ -90,7 +90,7 @@ def temp_merger_controller(image_path, debug=True, visualize=True):
 
     # -------- VISUALIZE --------
     if visualize:
-        vis = visualize_merger_v2(img, h_clusters, v_clusters, final_data)
+        vis = visualize_merger_v2(img, h_clusters, v_clusters, final_data,parallel_lines)
         show(vis, "MERGER V2 DEBUG VIEW")
 
         thickness_inference.visualize(img, final_data, wall_objects)

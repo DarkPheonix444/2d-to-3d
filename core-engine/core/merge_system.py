@@ -12,8 +12,9 @@ Line = Tuple[Point, Point]
 
 class MergeSystemV2:
 
-    def __init__(self, align_tol=5, debug=False):
+    def __init__(self, align_tol=5, parallel_max_gap=25, debug=False):
         self.align_tol = align_tol
+        self.parallel_max_gap = parallel_max_gap 
         self.debug = debug
 
     # ---------------------------
@@ -214,6 +215,7 @@ class MergeSystemV2:
                 "confidence": float(len(cluster))
             })
         final_data = self.remove_same_axis_redundancy(merged_data,)
+        parallel_lines=self.Parallel_finder(final_data)
         
         # -------- DEBUG --------
 
@@ -229,46 +231,14 @@ class MergeSystemV2:
             print(f"[MergeV2] merged_lines={len(merged_data)}")
             print(f"[MergeV2] gap_threshold={GAP_THRESHOLD:.2f}")
 
-            print("\n====== CLUSTER INTERNAL DEBUG ======")
 
-            # def debug_cluster(cluster, orientation, cid):
-            #     if orientation == "H":
-            #         intervals = [(s, e) for _, s, e in cluster]
-            #         axis_vals = [y for y, _, _ in cluster]
-            #     else:
-            #         intervals = [(s, e) for _, s, e in cluster]
-            #         axis_vals = [x for x, _, _ in cluster]
 
-            #     intervals.sort()
+           
 
-            #     print(f"\n[Cluster {cid} | {orientation}]")
-            #     print(f"size={len(cluster)} axis_std={np.std(axis_vals):.2f}")
 
-            #     print("intervals:")
-            #     for s, e in intervals:
-            #         print(f"  [{s:.1f} → {e:.1f}]")
+            print("\n====== FINAL LINE OVERLAP DEBUG ======")
 
-            #     print("gaps:")
-            #     for i in range(len(intervals)-1):
-            #         gap = intervals[i+1][0] - intervals[i][1]
-            #         print(f"  gap[{i}] = {gap:.1f}")
-
-            # cid = 1
-            # for c in h_clusters:
-            #     debug_cluster(c, "H", cid)
-            #     cid += 1
-
-            # for c in v_clusters:
-            #     debug_cluster(c, "V", cid)
-            #     cid += 1
-
-            # if self.debug:
-            #     return final_data, h_clusters, v_clusters
-
-            if self.debug:
-                print("\n====== FINAL LINE OVERLAP DEBUG ======")
-
-                def check_overlap(l1, l2):
+            def check_overlap(l1, l2):
                     (x1,y1),(x2,y2) = l1
                     (x3,y3),(x4,y4) = l2
 
@@ -286,9 +256,9 @@ class MergeSystemV2:
 
                     return 0
 
-                n = len(final_data)
+            n = len(final_data)
 
-                for i in range(n):
+            for i in range(n):
                     for j in range(i+1, n):
                         l1 = final_data[i]["line"]
                         l2 = final_data[j]["line"]
@@ -301,9 +271,42 @@ class MergeSystemV2:
                             print(f"  L2: {l2}")
                             print(f"  overlap = {overlap:.2f}")
 
+
             print("\n====== PARALLEL DUPLICATE CHECK ======")
 
-            for i in range(len(final_data)):
+            for p in parallel_lines:
+
+                    print("\n⚠ PARALLEL DUPLICATE:")
+
+                    print(f"  L1: {p['line_a']}")
+
+                    print(f"  L2: {p['line_b']}")
+
+                    print(
+                        f"  axis_diff = {p['axis_diff']}"
+                    )
+
+                    print(
+                        f"  overlap = {p['overlap']}"
+                    )
+           
+
+            
+      
+            print("final data length=", len(final_data))
+            return (
+                final_data,
+                h_clusters,
+                v_clusters,
+                parallel_lines    )
+
+        return (final_data,parallel_lines)
+    
+
+    def Parallel_finder(self,final_data):
+        parallel_store=[]
+
+        for i in range(len(final_data)):
                 for j in range(i+1, len(final_data)):
 
                     (x1,y1),(x2,y2) = final_data[i]["line"]
@@ -314,27 +317,41 @@ class MergeSystemV2:
                         axis_diff = abs(y1 - y3)
                         overlap = min(x2, x4) - max(x1, x3)
 
-                        if axis_diff <= self.align_tol and overlap > 0:
-                            print(f"\n⚠ PARALLEL DUPLICATE:")
-                            print(f"  L1: {final_data[i]['line']}")
-                            print(f"  L2: {final_data[j]['line']}")
-                            print(f"  axis_diff = {axis_diff}, overlap = {overlap}")
+                        if axis_diff <= self.parallel_max_gap and overlap > 0:
+                           parallel_store.append({
+
+                                "line_a": final_data[i]["line"],
+
+                                "line_b": final_data[j]["line"],
+
+                                "axis_diff": axis_diff,
+
+                                "overlap": overlap,
+
+                                "orientation": "H"
+                            })
 
                     # vertical
                     if abs(x1 - x2) < 2 and abs(x3 - x4) < 2:
                         axis_diff = abs(x1 - x3)
                         overlap = min(y2, y4) - max(y1, y3)
 
-                        if axis_diff <= self.align_tol and overlap > 0:
-                            print(f"\n⚠ PARALLEL DUPLICATE:")
-                            print(f"  L1: {final_data[i]['line']}")
-                            print(f"  L2: {final_data[j]['line']}")
-                            print(f"  axis_diff = {axis_diff}, overlap = {overlap}")
-        if self.debug:
-            print("final data length=", len(final_data))
-            return final_data, h_clusters, v_clusters
+                        if axis_diff <= self.parallel_max_gap and overlap > 0:
+                           parallel_store.append({
 
-        return final_data
+                                "line_a": final_data[i]["line"],
+
+                                "line_b": final_data[j]["line"],
+
+                                "axis_diff": axis_diff,
+
+                                "overlap": overlap,
+
+                                "orientation": "V"
+                            })
+        return parallel_store
+
+
     def collapse_intervals(self,intervals, tol):
             intervals.sort()
             merged = []
@@ -519,13 +536,16 @@ class MergeSystemV2:
 
         return final
     
-
+    
+    
+    
+    
    
 
 # ---------------------------
 # VISUALIZATION (OUTSIDE CLASS)
 # ---------------------------
-def visualize_merger_v2(image, h_clusters, v_clusters, merged_data):
+def visualize_merger_v2(image, h_clusters, v_clusters, merged_data,parallel_lines):
 
     vis = image.copy()
 
@@ -644,5 +664,76 @@ def visualize_merger_v2(image, h_clusters, v_clusters, merged_data):
             1,
             cv2.LINE_AA
         )
+
+        # -----------------------------
+    # Draw detected parallel pairs
+    # -----------------------------
+    if parallel_lines:
+
+        for pair in parallel_lines:
+
+            (x1, y1), (x2, y2) = pair["line_a"]
+            (x3, y3), (x4, y4) = pair["line_b"]
+
+            # -------------------------
+            # line A = BLUE
+            # -------------------------
+            cv2.line(
+                vis,
+                (int(x1), int(y1)),
+                (int(x2), int(y2)),
+                (255, 0, 0),
+                3
+            )
+
+            # -------------------------
+            # line B = RED
+            # -------------------------
+            cv2.line(
+                vis,
+                (int(x3), int(y3)),
+                (int(x4), int(y4)),
+                (0, 0, 255),
+                3
+            )
+
+            # -------------------------
+            # center connector
+            # -------------------------
+            cx1 = int((x1 + x2) / 2)
+            cy1 = int((y1 + y2) / 2)
+
+            cx2 = int((x3 + x4) / 2)
+            cy2 = int((y3 + y4) / 2)
+
+            cv2.line(
+                vis,
+                (cx1, cy1),
+                (cx2, cy2),
+                (255, 255, 0),
+                1
+            )
+
+            # -------------------------
+            # label
+            # -------------------------
+            mx = int((cx1 + cx2) / 2)
+            my = int((cy1 + cy2) / 2)
+
+            label = (
+                f"D:{pair['axis_diff']} "
+                f"O:{int(pair['overlap'])}"
+            )
+
+            cv2.putText(
+                vis,
+                label,
+                (mx, my),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.4,
+                (255, 255, 0),
+                1,
+                cv2.LINE_AA
+            )
 
     return vis
