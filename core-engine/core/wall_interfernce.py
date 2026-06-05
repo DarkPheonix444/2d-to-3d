@@ -6,7 +6,7 @@ class ThicknessInference:
 
     def __init__(
         self,
-        axis_tol=6,
+        axis_tol=8,
         overlap_ratio_thresh=0.6,
         debug=True
     ):
@@ -594,7 +594,12 @@ class ThicknessInference:
                 consumed_ids.append(
                     w["wall_id"]
                 )
+            merged_edge_ids = []
 
+            for wall in chain:
+                merged_edge_ids.extend(
+                    wall["edge_ids"]
+                )
             reconstructed.append({
 
                 "wall_id": new_id,
@@ -608,6 +613,8 @@ class ThicknessInference:
                 "confidence": confidence,
 
                 "parent_ids": consumed_ids,
+
+                "edge_ids": merged_edge_ids,
 
                 "generator": "chain_reconstruction",
 

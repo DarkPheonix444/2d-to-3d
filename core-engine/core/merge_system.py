@@ -12,7 +12,7 @@ Line = Tuple[Point, Point]
 
 class MergeSystemV2:
 
-    def __init__(self, align_tol=5, parallel_max_gap=25, debug=False):
+    def __init__(self, align_tol=8, parallel_max_gap=25, debug=False):
         self.align_tol = align_tol
         self.parallel_max_gap = parallel_max_gap 
         self.debug = debug
@@ -319,6 +319,9 @@ class MergeSystemV2:
 
                         if axis_diff <= self.parallel_max_gap and overlap > 0:
                            parallel_store.append({
+                               "wall_a_id": final_data[i]["id"],
+                                "wall_b_id": final_data[j]["id"],
+
 
                                 "line_a": final_data[i]["line"],
 
@@ -338,6 +341,9 @@ class MergeSystemV2:
 
                         if axis_diff <= self.parallel_max_gap and overlap > 0:
                            parallel_store.append({
+                                "wall_a_id": final_data[i]["id"],
+                                "wall_b_id": final_data[j]["id"],
+
 
                                 "line_a": final_data[i]["line"],
 
@@ -545,195 +551,160 @@ class MergeSystemV2:
 # ---------------------------
 # VISUALIZATION (OUTSIDE CLASS)
 # ---------------------------
-def visualize_merger_v2(image, h_clusters, v_clusters, merged_data,parallel_lines):
+def visualize_merger_v2(
+    image,
+    h_clusters,
+    v_clusters,
+    merged_data,
+    parallel_lines
+):
 
-    vis = image.copy()
+    overlap_vis = image.copy()
+    parallel_vis = image.copy()
 
-    # -----------------------------
-    # Draw clusters (light grey)
-    # -----------------------------
-    for cluster in h_clusters:
-        for y, s, e in cluster:
-            cv2.line(
-                vis,
-                (int(s), int(y)),
-                (int(e), int(y)),
-                (200, 200, 200),
-                1
-            )
+    # ==================================================
+    # OVERLAP DEBUG IMAGE
+    # ==================================================
 
-    for cluster in v_clusters:
-        for x, s, e in cluster:
-            cv2.line(
-                vis,
-                (int(x), int(s)),
-                (int(x), int(e)),
-                (200, 200, 200),
-                1
-            )
+    for wall in merged_data:
 
-    # -----------------------------
-    # Build overlap map
-    # -----------------------------
-    overlap_count = [0] * len(merged_data)
+        (x1, y1), (x2, y2) = wall["line"]
+
+        cv2.line(
+            overlap_vis,
+            (int(x1), int(y1)),
+            (int(x2), int(y2)),
+            (150, 150, 150),
+            1
+        )
 
     for i in range(len(merged_data)):
+
         (x1, y1), (x2, y2) = merged_data[i]["line"]
 
         for j in range(i + 1, len(merged_data)):
+
             (x3, y3), (x4, y4) = merged_data[j]["line"]
 
+            overlap = 0
+
+            # ---------------------
             # Horizontal overlap
+            # ---------------------
+
             if abs(y1 - y2) < 2 and abs(y3 - y4) < 2:
 
                 if abs(y1 - y3) <= 5:
 
-                    overlap = min(x2, x4) - max(x1, x3)
+                    overlap = (
+                        min(x2, x4)
+                        - max(x1, x3)
+                    )
 
-                    if overlap > 0:
-                        overlap_count[i] += 1
-                        overlap_count[j] += 1
-
+            # ---------------------
             # Vertical overlap
+            # ---------------------
+
             elif abs(x1 - x2) < 2 and abs(x3 - x4) < 2:
 
                 if abs(x1 - x3) <= 5:
 
-                    overlap = min(y2, y4) - max(y1, y3)
+                    overlap = (
+                        min(y2, y4)
+                        - max(y1, y3)
+                    )
 
-                    if overlap > 0:
-                        overlap_count[i] += 1
-                        overlap_count[j] += 1
+            if overlap > 0:
 
-    # -----------------------------
-    # Draw merged walls
-    # -----------------------------
-    for idx, d in enumerate(merged_data):
+                cv2.line(
+                    overlap_vis,
+                    (int(x1), int(y1)),
+                    (int(x2), int(y2)),
+                    (255, 0, 0),
+                    3
+                )
 
-        (x1, y1), (x2, y2) = d["line"]
-        votes = d["support_count"]
+                cv2.line(
+                    overlap_vis,
+                    (int(x3), int(y3)),
+                    (int(x4), int(y4)),
+                    (0, 0, 255),
+                    3
+                )
 
-        overlaps = overlap_count[idx]
+    # ==================================================
+    # PARALLEL DEBUG IMAGE
+    # ==================================================
 
-        # -------------------------
-        # Color by overlap count
-        # -------------------------
-        if overlaps == 0:
-            color = (0, 255, 0)       # green
-        elif overlaps == 1:
-            color = (0, 255, 255)     # yellow
-        elif overlaps == 2:
-            color = (0, 165, 255)     # orange
-        else:
-            color = (0, 0, 255)       # red
+    for wall in merged_data:
 
-        # -------------------------
-        # Offset overlapping lines
-        # -------------------------
-        offset = overlaps * 2
-
-        if abs(y1 - y2) < 2:
-            y1 += offset
-            y2 += offset
-
-        elif abs(x1 - x2) < 2:
-            x1 += offset
-            x2 += offset
-
-        thickness = 2
+        (x1, y1), (x2, y2) = wall["line"]
 
         cv2.line(
-            vis,
+            parallel_vis,
             (int(x1), int(y1)),
             (int(x2), int(y2)),
-            color,
-            thickness
+            (150, 150, 150),
+            1
         )
 
-        # Optional: display support count
-        cx = int((x1 + x2) / 2)
-        cy = int((y1 + y2) / 2)
+    for pair in parallel_lines:
+
+        (x1, y1), (x2, y2) = pair["line_a"]
+        (x3, y3), (x4, y4) = pair["line_b"]
+
+        # line A
+
+        cv2.line(
+            parallel_vis,
+            (int(x1), int(y1)),
+            (int(x2), int(y2)),
+            (255, 0, 0),
+            3
+        )
+
+        # line B
+
+        cv2.line(
+            parallel_vis,
+            (int(x3), int(y3)),
+            (int(x4), int(y4)),
+            (0, 0, 255),
+            3
+        )
+
+        # connector
+
+        cx1 = int((x1 + x2) / 2)
+        cy1 = int((y1 + y2) / 2)
+
+        cx2 = int((x3 + x4) / 2)
+        cy2 = int((y3 + y4) / 2)
+
+        cv2.line(
+            parallel_vis,
+            (cx1, cy1),
+            (cx2, cy2),
+            (0, 255, 255),
+            2
+        )
+
+        label = (
+            f"D:{pair['axis_diff']} "
+            f"O:{int(pair['overlap'])}"
+        )
 
         cv2.putText(
-            vis,
-            str(votes),
-            (cx, cy),
+            parallel_vis,
+            label,
+            (
+                int((cx1 + cx2) / 2),
+                int((cy1 + cy2) / 2)
+            ),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.35,
-            color,
-            1,
-            cv2.LINE_AA
+            0.4,
+            (0, 255, 255),
+            1
         )
 
-        # -----------------------------
-    # Draw detected parallel pairs
-    # -----------------------------
-    if parallel_lines:
-
-        for pair in parallel_lines:
-
-            (x1, y1), (x2, y2) = pair["line_a"]
-            (x3, y3), (x4, y4) = pair["line_b"]
-
-            # -------------------------
-            # line A = BLUE
-            # -------------------------
-            cv2.line(
-                vis,
-                (int(x1), int(y1)),
-                (int(x2), int(y2)),
-                (255, 0, 0),
-                3
-            )
-
-            # -------------------------
-            # line B = RED
-            # -------------------------
-            cv2.line(
-                vis,
-                (int(x3), int(y3)),
-                (int(x4), int(y4)),
-                (0, 0, 255),
-                3
-            )
-
-            # -------------------------
-            # center connector
-            # -------------------------
-            cx1 = int((x1 + x2) / 2)
-            cy1 = int((y1 + y2) / 2)
-
-            cx2 = int((x3 + x4) / 2)
-            cy2 = int((y3 + y4) / 2)
-
-            cv2.line(
-                vis,
-                (cx1, cy1),
-                (cx2, cy2),
-                (255, 255, 0),
-                1
-            )
-
-            # -------------------------
-            # label
-            # -------------------------
-            mx = int((cx1 + cx2) / 2)
-            my = int((cy1 + cy2) / 2)
-
-            label = (
-                f"D:{pair['axis_diff']} "
-                f"O:{int(pair['overlap'])}"
-            )
-
-            cv2.putText(
-                vis,
-                label,
-                (mx, my),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.4,
-                (255, 255, 0),
-                1,
-                cv2.LINE_AA
-            )
-
-    return vis
+    return overlap_vis, parallel_vis
